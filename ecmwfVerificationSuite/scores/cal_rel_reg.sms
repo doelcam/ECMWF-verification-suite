@@ -1,0 +1,326 @@
+%manual
+NAME
+
+  cal_rel_reg - Computes probabilistic scores for dichotomous events for regions
+
+DESCRIPTION
+
+  Computes the area-averaged reliability, resolution, Brier score,
+  ROC and value
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_rel_reg.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST BRV
+typeset -Z2 PEVT NPRO
+typeset -Z5 NSAM
+NSAM=$BRV_NSAM
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Get and compile fortran files
+#
+#rm -f cal_rel*.x
+if [[ -a cal_rel_reg.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_rel_reg.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_rel_reg.f tools.f -o cal_rel_reg.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_rel_reg.f tools.f -o cal_rel_reg.x $LINKLI1 $LINKLI3
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_rel*.x
+#
+export EXPID=${EXP_LIST[$ie]}
+if [[ $ie -lt $NUMMOD ]] ; then
+   export TYPID=${TYP_LIST[$ie]}
+   if [[ $TYPID = 0 ]] ; then
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+   else
+      export ORIID=off
+      export CLAID=off
+      export METID=off
+      export SYSID=off
+      export STRID=off
+   fi
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+if [[ $BRV_IPRB = 0 ]] ; then
+   NPRO=$BRV_NPRO
+else
+   NPRO=$((NENS+1))
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   DATE=20140101,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}.${JOB_ID}
+#
+# Loop over fields
+#
+        iz=0
+        while [[ $iz -le $TOT_ANO_PAR ]] ; do
+              PAR=${ANO_PAR[$iz]}
+              LEV=${ANO_LEV[$iz]}
+              YYS=$YY1
+              YYE=$YY2
+              if [[ $PAR = 228 ]] ; then
+                 if [[ $YY1 -lt $YY1_228 ]] ; then
+                    YYS=$YY1_228
+                 fi
+              fi
+#
+              \rm -rf ${TARDIR}
+              mkdir ${TARDIR}
+              cd ${TARDIR}
+              ECMISS=0 # This is 0 in case the tar file exists in ECFS
+              ROOT=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+              TARFILE=${ROOT}
+              ecp -o ec:${ECDISK_LONG}/rel/${TARFILE}.tar . || echo "${TARFILE}.tar is missing in ECFS"
+              if [[ -s ${TARFILE}.tar ]] ; then
+                 tar xvf ${TARFILE}.tar
+                 \rm -f ${TARFILE}.tar
+                 echo "WARNING: Files for the experiment already exist"
+                 echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+              else
+                 echo "All the files will be created and a new tar file archived"
+                 ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+              fi
+              cd ..
+#
+# loop over lead time periods
+#
+              ip=0
+              while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                    IAFCM=${ALL_IAFCM[$ip]}
+                    IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostic tar files
+# Check if all the ouput files exist
+#
+                    compute_reg=1
+                    DIA_REG=""
+                    for REG in ${ALL_REG[*]} ; do
+                        do_reg=1
+                        for PEVT in ${PEVT_LIST[*]} ; do
+                            FILE=${ROOT}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                            if [[ -s ${TARDIR}/${FILE} ]] ; then
+                               echo "${FILE} exists"
+		    	      \rm -r ${TARDIR}/${FILE}
+			       echo "deleting file and recomupting"
+			       do_reg=2
+                            else
+                               do_reg=2
+                            fi
+                            if [[ $BRV_BOOT -eq 1 ]] ; then
+                               if [[ -s ${TARDIR}/${FILE}_S${NSAM}.ran ]] ; then
+                                  echo "${FILE}_S${NSAM}.ran exists"
+		    	         \rm -r ${TARDIR}/${FILE}_S${NSAM}.ran
+			          echo "deleting file and recomupting"
+			          do_reg=2
+                               else
+                                  do_reg=2
+                               fi
+                            fi
+                        done # PEVT loop
+                        if [[ $FORCEBRV = 1 ]] ; then
+                           do_reg=2
+                        fi
+                        if [[ $do_reg == 2 ]] ; then
+                           DIA_REG="${DIA_REG} ${REG}"
+                           compute_reg=2
+                        fi
+                    done #REG loop
+#
+                    set -A DIA_REG $DIA_REG
+                    REG_LST=""
+                    n=0
+                    while [[ $n -lt $TOT_REG ]] ; do
+                          REG_LST="${REG_LST} 0"
+                          n=$((n+1))
+                    done
+                    set -A REG_LST $REG_LST
+                    if [[ $compute_reg -eq 2 ]] ; then
+                       for REG in ${DIA_REG[*]} ; do
+                           n=0
+                           while [[ $n -lt $TOT_REG ]] ; do
+                                 if [[ ${REG_NAM[$n]} == $REG ]] ; then
+                                    REG_LST[$n]=1
+                                 fi
+                                 n=$((n+1))
+                           done
+                       done
+                    fi
+                    rcal=""
+                    n=0
+                    while [[ $n -lt $TOT_REG ]] ; do
+                          rcal="${rcal} ${REG_LST[$n]},"
+                          n=$((n+1))
+                    done
+cat > crel_regcal_$ie << EOF
+rcal=${rcal}
+ /
+EOF
+#
+# Compute probabilistic score files if necessary
+#
+cat > rel_reg_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nevt=${BRV_NEVT},
+  pevt=${BRV_PEVT},
+  permeth=${BRV_PERM},
+  boot=${BRV_BOOT},
+  nsam=${BRV_NSAM},
+  iprb=${BRV_IPRB},
+  npro=${BRV_NPRO},
+  nreg=${TOT_REG},
+ /
+EOF
+                    if [[ $compute_reg -eq 2 ]] ; then
+                       ECMISS[$id]=1 # The new tar file will have to be archived in ECFS
+                       if [[ $PAR -eq 139 ]] ; then
+                          cat rel_reg_$ie reglist_139 crel_regcal_$ie > rel_reg_list_$ie
+                       else
+                          cat rel_reg_$ie reglist_std crel_regcal_$ie > rel_reg_list_$ie
+                       fi
+                       ./cal_rel_reg.x < rel_reg_list_$ie
+#
+# Collect results
+#
+                       for PEVT in ${PEVT_LIST[*]} ; do
+                           for REG in ${DIA_REG[*]} ; do
+                               FILE=${ROOT}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                               if [[ -s ${FILE} ]] ; then
+                                  mv ${FILE} ${TARDIR}/.
+                               else
+                                  echo "There is a problem; ${FILE} is supposed to exist"
+                                  exit
+                               fi
+                               if [[ $BRV_BOOT = 1 ]] ; then
+                                  if [[ -s ${FILE}_S${NSAM}.ran ]] ; then
+                                     mv ${FILE}_S${NSAM}.ran ${TARDIR}/.
+                                  else
+                                     echo "There is a problem; ${FILE}_S${NSAM}.ran is supposed to exist"
+                                     exit
+                                  fi
+                               fi
+                           done # REG loop
+                       done # PEVT loop
+                    fi
+                    ip=$((ip+1))
+              done # ip endwhile
+#
+# Copy in ECFS if required
+#
+              if [[ $BRV_ECST -eq 1 ]] ; then
+                 emkdir -p ec:${ECDISK_LONG}/rel
+                 if [[ ${ECMISS} -eq 1 ]] ; then
+                    cd ${TARDIR}
+                    tar -b 128 -cvf ../${TARFILE}.tar .
+                    cd ..
+                    ecp -o ${TARFILE}.tar ec:${ECDISK_LONG}/rel/
+                    echmod 770 ec:${ECDISK_LONG}/rel/${TARFILE}.tar
+                    \rm -f ${TARFILE}.tar
+                 fi
+              fi # ECSTORE
+              \rm -rf ${TARDIR}
+              iz=$((iz+1))
+        done # iz endwhile
+        id=$((id+1))
+    done # id loop
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_rel_reg.sms"
+#
+%include <tail.h>
+#

@@ -1,0 +1,870 @@
+#
+#-------------------------------------------
+# script to get monthly mean reference data 
+#-------------------------------------------
+#
+set +e
+set -vx
+#
+echo "start get_ref"
+
+SMSINCLUDE=/home/ms/gb/ukdm/sms/verify/scores_original/include
+
+#
+typeset -Z4 YY YA1 YA2 YB1 YB2 YP1 YP2
+typeset -Z2 MM DD MA1 DA1 MA2 DA2 MB1 DB1 MB2 DB2 MP1 DP1 MP2 DP2 TT
+typeset -Z3 PAR LEV
+typeset -Z2 FCM
+typeset -Z2 CCE
+#
+pwd
+#
+BASETIME=$((YY1*100+ALL_MON[0])) # First date required
+MMED=${ALL_MON[$((NUMSEA-1))]} # Last start date of every year
+YYE=$YY2
+MME=$((MMED+NMON-1))
+if [[ $MME -gt 12 ]] ; then
+   MMR=$((MME/12))
+   MME=$((MME-MMR*12))
+   YYE=$((YYE+MMR))
+fi
+ENDDAT=$((YYE*100+MME)) # Last date required
+CC=`echo $BASETIME | cut -c1-2`
+YY=`echo $BASETIME | cut -c1-4`
+MM=`echo $BASETIME | cut -c5-6`
+DD=$DD1
+TT=$TT1
+#
+# Fortran sources
+#
+cp $SMSINCLUDE/refmm_an.f .
+cp $SMSINCLUDE/refmm_tm.f .
+#cp /ne4/verify/data/refe/6/refmm_an.f .
+#cp /ne4/verify/data/refe/6/refmm_tm.f .
+#pgf90 $COMPOP1 refmm_an.f -o refmm_an.x $LINKLI1
+#pgf90 $COMPOP1 refmm_tm.f -o refmm_tm.x $LINKLI1
+gfortran $COMPOP1 refmm_an.f -o refmm_an.x $LINKLI1 $LINKLI3
+gfortran $COMPOP1 refmm_tm.f -o refmm_tm.x $LINKLI1 $LINKLI3
+ls -l *.x
+#
+emkdir -p ${ECDISK}/data/refe || echo "ECFS directory already exists"
+#
+# Height correction between ERA 40 and ERA Interim for temperature
+
+DO_corr=0
+
+if [[ $DO_corr -eq 1 ]] ; then
+
+#
+cat > mars_orog1 << EOF
+  retrieve,
+  class=ei,type=an,stream=oper,expver=1,levtype=ml,level=1,
+  date=20030101,resol=av,grid=80,
+  gaussian=reduced,time=00,target=eian_orog,
+  param=129
+EOF
+mars mars_orog1
+cat > mars_orog2 << EOF
+  retrieve,
+  class=e4,type=an,stream=moda,expver=1,levtype=ml,level=1,
+  date=20001101,resol=av,grid=80,
+  gaussian=reduced,time=00,target=e4an_orog,
+  param=129
+EOF
+mars mars_orog2
+cat > mars_corr << EOF
+read,
+  fieldset=eian,
+  source=eian_orog,
+  param=129
+read,
+  fieldset=e4an,
+  source=e4an_orog,
+  param=129
+compute,
+  fieldset=cor,
+  formula="(eian-e4an)*0.0065/9.8"
+write,
+  fieldset=cor,
+  target=corr.grb
+EOF
+mars mars_corr
+
+fi # CORR LOOp
+#
+
+
+while (( $BASETIME <= $ENDDAT )) ; do
+#
+# calculate start date and end date for flux forecast retrieval
+#
+      YB1=$YY
+      MB1=$MM
+      DB1=$DD
+      YB2=$YY
+      MB2=$MM
+      let leaptest=${YB2}-4*(${YB2}/4)+1
+      if [ $leaptest -eq 1 ] ; then
+         febl=29
+      else
+         febl=28
+      fi
+      set -A nday 31 $febl 31 30 31 30 31 31 30 31 30 31
+      print 'days of the year '$YY': nday = ' "${nday[*]}"
+      if (( $MB2 <  2 )); then
+         mhlp=0
+      else
+         mhlp=$((MB2-1))
+      fi
+      let DB2=nday[$mhlp]
+#
+# calculate start date and end date for 24/36 FC precip data to cover this particular month
+#
+      YP1=$YY
+      if (( $MM <  2 )); then
+         MP1=12
+         YP1=$((YY-1))
+      else
+         MP1=$((MM-1))
+      fi
+      let leaptest=${YP1}-4*(${YP1}/4)+1
+      if [ $leaptest -eq 1 ] ; then
+         febl=29
+      else
+         febl=28
+      fi
+      set -A nday 31 $febl 31 30 31 30 31 31 30 31 30 31
+      print 'days of the year '$YY': nday = ' "${nday[*]}"
+      if (( $MP1 <  2 )); then
+         mhlp=0
+      else
+         mhlp=$((MP1-1))
+      fi
+      let DP1=nday[$mhlp]
+#
+      YP2=$YY
+      MP2=$MM
+      DP2=31
+      let leaptest=${YP2}-4*(${YP2}/4)+1
+      if [ $leaptest -eq 1 ] ; then
+         febl=29
+      else
+         febl=28
+      fi
+      set -A nday 31 $febl 31 30 31 30 31 31 30 31 30 31
+      print 'days of the year '$YY': nday = ' "${nday[*]}"
+      if (( $MP2 <  2 )); then
+         mhlp=0
+      else
+         mhlp=$((MP2-1))
+      fi
+      let DP2=nday[$mhlp]-1
+      let ndm=nday[$mhlp]
+#
+      CCE=`echo  $YY | cut -c1-2`
+      YYE=`echo  $YY | cut -c3-4`
+      MME=`echo  $MM | cut -c1-2`
+#
+# select the class of the analyses
+#
+      ANCLASS=od
+      ANCLASS=ei
+#      if [[ $BASETIME -le 200207 ]] ; then
+#         ANCLASS=e4
+#      fi
+#
+# Check the number of variables actually used
+#
+      numpar=0
+      mars_sfc_par=""
+      mars_pl_par=""
+      mars_pl_lev=""
+      iz=0
+      while [[ $iz -le $TOT_ALL_PAR ]] ; do
+            PAR=${ALL_PAR[$iz]}
+            LEV=${ALL_LEV[$iz]}
+            LTY=${ALL_LTY[$iz]}
+            if [[ ${PAR} -eq 228 ]] ; then
+               NOPREC=0
+               if [[ $YY -lt $YY1_228 ]] ; then
+                  echo "Precipitation not available"
+                  NOPREC=1
+               else
+                  numpar=$((numpar+1))
+               fi
+            else
+               numpar=$((numpar+1))
+            fi
+#
+            if [[ $LTY = sfc ]] ; then
+               mars_sfc_par="${mars_sfc_par} ${PAR}"
+            fi
+            if [[ $LTY = pl ]] ; then
+               mars_pl_par="${mars_pl_par} ${PAR}"
+               mars_pl_lev="${mars_pl_lev} ${LEV}"
+            fi
+#
+            iz=$((iz+1))
+      done # iz loop over parameters
+      set -A MARS_PL_LEV ${mars_pl_lev[*]}
+      echo "Number of parameters for this year is "$numpar
+      idealsize=$numpar
+#
+# Check if the MM-file exists and has the right number of fields
+# If the file exists and has the right size, ret_any_field=1
+# ret_any_field takes the value 2 if at least one field needs to
+# be retrieved either from ECFS or MARS during the execution.
+# In the second case, the new file has to be stored in ECFS
+#
+      ret_any_field=1
+      if [[ -s MM_refe_${YY}${MM}${DD}${TT}.smon ]] ; then
+         if [[ $mars_sfc_par != "" ]] ; then
+            for PAR in ${mars_sfc_par[*]} ; do
+#
+# there is the possibility of using precip from the forecasts or from GPCP
+#
+                EXPVER=any
+                if [[ $PAR = 228 ]] ; then
+                   if [[ $SET_228 = gpcp ]] ; then
+                      EXPVER=gpcp
+#                  elif [[ $SET_228 = pe4o ]] ; then
+                   elif [[ $SET_228 = pe4i ]] ; then
+                      EXPVER=1
+                   elif [[ $SET_228 = cru ]] ; then
+                      EXPVER=scru
+                   fi
+                fi
+
+
+# Forcing soil moisture to come from ERA-Land (see Balsamo et al 2012) D.MacLeod added 4/11/13
+                if [[ $PAR = 039 ]] ; then
+                    EXPVER=fupd
+                else
+                    echo Got here
+                fi
+			
+
+
+                \rm single_field
+mars<<EOM
+read,
+  source=MM_refe_${YY}${MM}${DD}${TT}.smon,
+  expver=${EXPVER},
+  param=${PAR},
+  grid=2.5/2.5,
+  target=single_field
+EOM
+                if [[ -s single_field ]] ; then
+                   cat single_field >> smon_tmp
+                fi
+            done
+         fi
+         if [[ $mars_pl_par != "" ]] ; then
+            nmars=0
+            for PAR in ${mars_pl_par[*]} ; do
+                LEV=${MARS_PL_LEV[$nmars]}
+                \rm single_field
+mars<<EOM
+read,
+  source=MM_refe_${YY}${MM}${DD}${TT}.smon,
+  param=${PAR},
+  levelist=${LEV},
+  target=single_field
+EOM
+                if [[ -s single_field ]] ; then
+                   cat single_field >> smon_tmp
+                fi
+                nmars=$((nmars+1))
+            done
+         fi
+#
+          #/home/ma/emos/bin/${ARCH}/GRIB_profile smon_tmp > list0
+          #grib_ls smon_tmp > list0
+          #wc list0 > list1
+          #cut -c 1-8 list1 | read fakesize
+          #lastsize=$((fakesize-5))
+         lastsize=`grib_count smon_tmp`
+         echo $lastsize
+         if [[ $lastsize != $idealsize ]] ;then
+            echo "File of wrong size"
+            echo "The smon-file has not all the expected fields"
+            ret_any_field=2
+            \rm -f smon_tmp
+         else
+            echo "File of exactly the size required"
+            echo "The data are stored in file smon_tmp"
+            ret_any_field=1
+            read_field=1
+            mv smon_tmp MM_refe_${YY}${MM}${DD}${TT}.smon
+         fi
+      else
+         ret_any_field=2
+      fi
+#
+# if some of the fields for the reference file do not exist, create it
+#
+      if [[ $ret_any_field -eq 2 ]] ; then
+         \rm -f MM_refe_${YY}${MM}${DD}${TT}.smon
+         METHOD=1
+#
+# loop over parameter to retrieve
+#
+         iz=0
+         while [[ $iz -le $TOT_ALL_PAR ]] ; do
+               \rm -f getdata
+               PAR=${ALL_PAR[$iz]}
+               LEV=${ALL_LEV[$iz]}
+               LTY=${ALL_LTY[$iz]}
+               TYP=${ALL_TYP[$iz]}
+               FRQ=${ALL_FRQ[$iz]}
+               if [[ $FRQ = F ]] ; then
+                  FRQ_DIR=""
+               else
+                  FRQ_DIR="/${FRQ}"
+               fi
+               if [[ $PAR = 228 && $SET_228 = gpcp ]] ; then
+                  TYP=an # GPCP is GRIB coded as an analysis
+               fi
+               EXPVER=any
+               SET228=""
+               if [[ $PAR = 228 ]] ; then
+                  if [[ $SET_228 = gpcp ]] ; then
+                     EXPVER=gpcp
+#                 elif [[ $SET_228 = pe4o ]] ; then
+                  elif [[ $SET_228 = pe4i ]] ; then
+                     EXPVER=1
+                  elif [[ $SET_228 = cru ]] ; then
+                     EXPVER=scru
+                  fi
+                  SET228="/${SET_228}"
+               fi
+               
+#               if [[ $PAR = 039 ]] ; then
+#                   EXPVER=fupd
+#               fi
+
+               retrieval=2
+#
+# It looks for the data in the ENSEMBLES ECFS directory
+#
+               echo "Try to copy reference file from ENSEMBLES filesystem in ECFS"
+               if [[ $PAR = 228 ]] ; then
+#                 if [[ $NOPREC = 0 && $SET_228 != pe4o ]] ; then
+                  if [[ $NOPREC = 0 ]] ; then
+                    ecp -o ec:/ENSEMBLES/verify/data/refe${SET228}/${PAR}_${LEV}_${YY}${MM}${DD}${TT} ${PAR}_${LEV}_${YY}${MM} || echo "ref file missing in ENSEMBLES ECFS"
+ 	
+                  fi
+               else
+                  ecp -o ec:/ENSEMBLES/verify/data/refe${FRQ_DIR}/${PAR}_${LEV}_${YY}${MM}${DD}${TT} ${PAR}_${LEV}_${YY}${MM} || echo "ref file missing in ENSEMBLES ECFS"
+               fi
+               if [[ -s ${PAR}_${LEV}_${YY}${MM} ]] ; then
+                  echo "Reference file exists in working directory"
+                  echo "Skip retrieval for this month..."
+                  retrieval=1
+                  cat ${PAR}_${LEV}_${YY}${MM} >> MM_refe_${YY}${MM}${DD}${TT}.smon
+               else
+                  retrieval=2
+               fi
+               if [[ $PAR = 228 && $NOPREC = 1 ]] ; then
+                  retrieval=1
+               fi
+               if [[ $retrieval -eq 2 ]] ; then
+                  \rm -f ${PAR}_${LEV}_${YY}${MM}
+                  echo "The field does not exist in the monthly file and further action is required"
+                  echo "Retrieve field from mars"
+                  if [[ $LTY = pl || $PAR = @(034|039|040|041|042|139|141|151|164|165|166|167|168) ]] ; then
+                     echo "retrieve analysis data"
+#
+# calculate start date and end date to cover this particular month
+#
+                     YA1=$YY
+                     MA1=$MM
+                     DA1=$DD
+                     TA1=$((TT+FRQ))
+                     if [[ $TA1 -ge 24 ]] ; then
+                        TA1=$((TA1-24))
+                        DA1=$((DA1+1))
+                     fi
+                     let leaptest=${YA1}-4*(${YA1}/4)+1
+                     if [ $leaptest -eq 1 ] ; then
+                        febl=29
+                     else
+                        febl=28
+                     fi
+                     set -A nday 31 $febl 31 30 31 30 31 31 30 31 30 31
+                     print 'days of the year '$YY': nday = ' "${nday[*]}"
+                     YA2=$YY
+                     MA2=$MM
+                     let DA2=nday[$((MA1-1))]
+                     if [[ $TT -gt 0 || $FRQ -eq 24 ]] ; then
+                        DA2=1
+                        MA2=$((MA2+1))
+                     fi
+                     if (( $MA2 > 12 )); then
+                        MA2=1
+                        YA2=$((YA2+1))
+                     fi
+#
+                     timelst=""
+                     ntime=0
+                     time=$TT
+                     ncontrol=0
+                     while [[ $ncontrol -lt 24 ]] ; do
+                           time=$((time+FRQ))
+                           if [[ $time -ge 24 ]] ; then
+                              time=$((time-24))
+                           fi
+                           timelst="${timelst}/${time}"
+                           ntime=$((ntime+1))
+                           ncontrol=$((ncontrol+FRQ))
+                     done
+                     timelst=${timelst#/}
+                     if [[ $PAR = @(167|168) && $ANCLASS = ei ]] ; then
+
+                        \rm -f toto.grb
+cat>getdata<<EOF
+retrieve,
+  param=${PAR},
+  type=${TYP},
+  class=${ANCLASS},
+  levtype=${LTY},
+  levelist=${LEV},
+  stream=oper,
+  expver=$METHOD,
+  date=${YA1}${MA1}${DA1}/to/${YA2}${MA2}${DA2},
+  time=${timelst},
+  resol=av,grid=80,gaussian=reduced,
+  target=toto.grb,
+EOF
+ 			if [[ $DO_corr -eq 1 ]] ; then
+			   echo "T2m and D2m are corrected for height"
+cat>>getdata<<EOF
+  resol=av,grid=80,gaussian=reduced,
+  target=toto.grb
+EOF                     
+		        mars getdata
+#
+                        grib_ls toto.grb>toto.lst
+                        tail -1 toto.lst|read -d o nfield
+                        nf=1
+                        rm -f corr
+                        while [[ $nf -le $nfield ]] ; do
+                              cat corr.grb >> corr
+                              nf=$((nf+1))
+                        done
+                        \rm -f corfield.grb
+cat>getdata<<EOF
+read,
+  source=toto.grb,
+  param=${PAR},
+  fieldset=toto1
+read,
+  source=corr,
+  param=129,
+  fieldset=toto2
+compute,
+  accuracy=16,
+  fieldset=totocor,
+  formula="(toto1+toto2)"
+write,
+  fieldset=totocor,
+  target=corfield.grb
+EOF
+                        mars getdata
+cat>getdata<<EOF
+read,
+  source=corfield.grb,
+  param=${PAR},
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+
+echo getdata
+                        mars getdata
+			
+			else # DO_corr loop
+cat>>getdata<<EOF
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+			mars getdata
+			fi #DO_corr
+			
+			
+			
+                     elif [[ $PAR = 039 ]] ; then # retrive the soil moisture from era land
+cat>getdata<<EOF
+retrieve,
+  param=${PAR},
+  type=an,
+  class=rd,
+  levtype=sfc,
+  stream=oper,
+  expver=fupd,
+  date=${YA1}${MA1}${DA1}/to/${YA2}${MA2}${DA2},
+  time=${timelst},
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+                       mars getdata		     
+		     else
+cat>getdata<<EOF
+retrieve,
+  param=${PAR},
+  type=${TYP},
+  class=${ANCLASS},
+  levtype=${LTY},
+  levelist=${LEV},
+  stream=oper,
+  expver=$METHOD,
+  date=${YA1}${MA1}${DA1}/to/${YA2}${MA2}${DA2},
+  time=${timelst},
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+                        mars getdata
+                     fi
+#
+                     echo "process analysis data"
+                     if (( $MA1 <  2 )); then
+                        mhlp=0
+                     else
+                        mhlp=$((MA1-1))
+                     fi
+                     let ndm=nday[$mhlp]
+                     ndm=$((ndm*ntime))
+#
+cat > nlist << EOF
+ &control
+   icc=${CCE}
+   iyy=${YYE}
+   imm=${MME}
+   idd=${ndm}
+   ipar=${PAR}
+   ilev=${LEV}
+ /
+EOF
+                     ./refmm_an.x < nlist
+                     mv ${PAR}_${LEV}_${YY}${MM}.mm ${PAR}_${LEV}_${YY}${MM}
+#
+                  elif [[ $PAR = @(201|202) ]] ; then
+                     echo "Tmax and Tmin are computed at the same time"
+                     echo "retrieve 6-hourly T2m analysis data"
+                     \rm -f 167_000_${YY}${MM}
+                     if [[ $ANCLASS = ei ]] ; then
+                        echo "T2m is corrected for height"
+                        \rm -f toto.grb
+cat>getdata<<EOF
+retrieve,
+  param=167,
+  type=${TYP},
+  class=${ANCLASS},
+  levtype=sfc,
+  levelist=0,
+  stream=oper,
+  expver=$METHOD,
+  date=${YB1}${MB1}${DB1}/to/${YB2}${MB2}${DB2},
+  time=00/06/12/18,
+  resol=av,grid=80,gaussian=reduced,
+  target=toto.grb
+EOF
+                        mars getdata
+                        grib_ls toto.grb>toto.lst
+                        tail -1 toto.lst|read -d o nfield
+                        nf=1
+                        \rm -f corr
+                        while [[ $nf -le $nfield ]] ; do
+                              cat corr.grb >> corr
+                              nf=$((nf+1))
+                        done
+#
+                        \rm -f corfield.grb
+cat>getdata<<EOF
+read,
+  source=toto.grb,
+  param=167,
+  fieldset=toto1
+read,
+  source=corr,
+  param=129,
+  fieldset=toto2
+compute,
+  accuracy=16,
+  fieldset=totocor,
+  formula="(toto1+toto2)"
+write,
+  fieldset=totocor,
+  target=corfield.grb
+EOF
+                        mars getdata
+cat>getdata<<EOF
+read,
+  source=corfield.grb,
+  param=167,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=167_000_${YY}${MM}
+EOF
+                        mars getdata
+                     else
+cat>getdata<<EOF
+retrieve,
+  param=167,
+  type=an,
+  class=${ANCLASS},
+  levtype=sfc,
+  levelist=0,
+  stream=oper,
+  expver=$METHOD,
+  date=${YB1}${MB1}${DB1}/to/${YB2}${MB2}${DB2},
+  time=00/06/12/18,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=167_000_${YY}${MM}
+EOF
+                        mars getdata
+                     fi
+#
+                     echo "compute Tmax and Tmin from 6-hourly analysis data"
+                     ndm=$DB2
+cat > nlist << EOF
+ &control
+   icc=${CCE}
+   iyy=${YYE}
+   imm=${MME}
+   idd=${ndm}
+   ipar=${PAR}
+ /
+EOF
+                     ./refmm_tm.x < nlist
+                     \rm -f 167_000_${YY}${MM}
+#
+                  elif [[ $PAR = @(146|147|169|175|176|177|178|179|182) ]] ; then
+                     echo "retrieve flux forecast data"
+                     \rm -f ${PAR}_${LEV}_${YY}${MM}
+cat>getdata<<EOF
+retrieve,
+  param=${PAR},
+  type=${TYP},
+  class=${ANCLASS},
+  levtype=${LTY},
+  levelist=${LEV},
+  stream=oper,
+  expver=$METHOD,
+  date=${YB1}${MB1}${DB1}/to/${YB2}${MB2}${DB2},
+  time=00,
+  step=24,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+                     mars getdata
+#
+                     echo "process non precip forecast data"
+cat > nlist << EOF
+ &control
+   icc=${CCE}
+   iyy=${YYE}
+   imm=${MME}
+   idd=${DB2}
+   ipar=${PAR}
+   ilev=${LEV}
+ /
+EOF
+                     ./refmm_an.x < nlist
+#
+# The GRIB headers of the fluxes need to be referred to the beginning of the month
+#
+                     CCR=$CCE
+                     YYR=$YYE
+                     CCR=$((CCR+1))
+                     if [[ $YYR -eq 0 ]] ; then
+                        YYR=100
+                        CCR=$((CCR-1))
+                     fi
+
+                     mv ${PAR}_${LEV}_${YY}${MM}.mm grib_in
+                    grib_set -s dataDate=${YY}${MM}${DD}${TT} grib_in grib_out
+                     mv grib_out ${PAR}_${LEV}_${YY}${MM}
+#
+                  elif [[ $PAR = 228 ]] ; then
+                     if [[ $SET_228 = gpcp ]] ; then
+                        if [[ $YY -ge $YY1_228 ]] ; then
+                           echo "get precipitation data (usually GPCP)"
+                           echo "check that the units agree with those of the MM-files (mm/day)"
+                           cp /vol/seasonal_data/odb/rain/gpcp_2.1/GPCPsgobs${YY}${MM} prec.gpcp
+cat>getdata<<EOF
+read,
+  param=228,
+  type=${TYP},
+  source=prec.gpcp,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=228_000_${YY}${MM}
+EOF
+                           mars getdata
+                           ls -l ${PAR}_${LEV}_${YY}${MM}
+                        fi # filter for the year in precip
+                     elif [[ $SET_228 = cru ]] ; then
+                        if [[ $YY -ge $YY1_228 ]] ; then
+                           echo "if CRU data are missing from ECFS, either the"
+                           echo "data is too high (TS2.1 goes only up to 2002)"
+                           echo "or the ECFS process failed"
+                           exit
+                        fi # filter for the year in precip
+#                    elif [[ $SET_228 = pe4o ]] ; then
+                     elif [[ $SET_228 = pe4i ]] ; then
+                        echo "retrieve convective and large-scale precipitation forecast data"
+                        \rm -f ${PAR}_${LEV}_${YY}${MM}
+cat>getdata<<EOF
+retrieve,
+  param=142/143,
+  type=${TYP},
+  class=${ANCLASS},
+  levtype=sfc,
+  stream=oper,
+  expver=1,
+  date=${YB1}${MB1}${DB1}/to/${YB2}${MB2}${DB2},
+  time=00,
+  step=24,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  target=${PAR}_${LEV}_${YY}${MM}
+EOF
+                        mars getdata
+#
+                        echo "obtain total precip"
+cat>getdata<<EOF
+read,
+  source=${PAR}_${LEV}_${YY}${MM},
+  param=142,
+  fieldset=toto1
+
+read,
+  source=${PAR}_${LEV}_${YY}${MM},
+  param=143,
+  fieldset=toto2
+
+compute,
+  fieldset=toto3,
+  formula="(toto1+toto2)"
+
+compute,
+  fieldset=toto4,
+  formula="toto3*1000"
+
+write,
+  fieldset=toto4,
+  target=grib_in
+EOF
+                        mars getdata
+                        grib_set -r -s paramId=228,bitsPerValue=16 grib_in grib_out
+                        mv grib_out ${PAR}_${LEV}_${YY}${MM}
+#
+                        echo "process precip forecast data"
+cat > nlist << EOF
+ &control
+   icc=${CCE}
+   iyy=${YYE}
+   imm=${MME}
+   idd=${DB2}
+   ipar=${PAR}
+   ilev=${LEV}
+ /
+EOF
+                        ./refmm_an.x < nlist
+#
+# The GRIB headers of the precip need to be referred to the beginning of the month
+#
+                        CCR=$CCE
+                        YYR=$YYE
+                        CCR=$((CCR+1))
+                        if [[ $YYR -eq 0 ]] ; then
+                           YYR=100
+                           CCR=$((CCR-1))
+                        fi
+
+                        mv ${PAR}_${LEV}_${YY}${MM}.mm grib_in
+                        grib_set -s dataDate=${YY}${MM}${DD}${TT} nam_chhea grib_in grib_out
+                        mv grib_out ${PAR}_${LEV}_${YY}${MM}
+                     fi # endif GPCP, CRU or analyses
+                  fi # endif depending on parameter
+#
+# After retrieving parameters, copy the new file in ECFS and also
+# concatenate the single fields a temporary smon-file with only
+# the fields to be analysed in the suite
+#
+                  emkdir -p ec:/ENSEMBLES/verify/data/refe${FRQ_DIR}
+                  if [[ -s ${PAR}_${LEV}_${YY}${MM} ]] ; then
+         #            ecp -o ${PAR}_${LEV}_${YY}${MM} ec:/ENSEMBLES/verify/data/refe${FRQ_DIR}${SET228}/${PAR}_${LEV}_${YY}${MM}${DD}${TT}
+	#	     echmod 770 ec:/ENSEMBLES/verify/data/refe${FRQ_DIR}${SET228}/${PAR}_${LEV}_${YY}${MM}${DD}${TT}
+	ecp -o ${PAR}_${LEV}_${YY}${MM} ec:/ne4/verify/data/refe/6/${PAR}_${LEV}_${YY}${MM}${DD}${TT} ${PAR}_${LEV}_${YY}${MM} || echo "ref file missing in TEST DIRECTORY"
+	echmod 770   ec:/ne4/verify/data/refe/6/${PAR}_${LEV}_${YY}${MM}${DD}${TT} ${PAR}_${LEV}_${YY}${MM}   
+                     cat ${PAR}_${LEV}_${YY}${MM} >> MM_refe_${YY}${MM}${DD}${TT}.smon
+                  fi
+               fi # endif for the initial check of the PAR file
+               \rm -f ${PAR}_${LEV}_${YY}${MM}
+               ls -l MM_refe_${YY}${MM}${DD}${TT}.smon
+               iz=$((iz+1))
+         done # iz loop over parameters
+#
+# copy modified/new file into ECFS if it has the right size
+#
+          #/home/ma/emos/bin/${ARCH}/GRIB_profile MM_refe_${YY}${MM}${DD}${TT}.smon > list0
+          #grib_ls MM_refe_${YY}${MM}${DD}${TT}.smon > list0
+          #wc list0 > list1
+          #cut -c 1-8 list1 | read fakesize
+          #lastsize=$((fakesize-5))
+         lastsize=`grib_count MM_refe_${YY}${MM}${DD}${TT}.smon` 
+         echo $lastsize
+         if [[ $lastsize != $idealsize ]] ;then
+            echo "The temporary file still has the wrong size"
+            exit
+         else
+            echo "A temporary file with the right size has been created"
+         fi # endif for size check
+      fi # endif whether read field from file or retrieve from mars
+      \rm -f ???_???_${YY}${MM}*
+#
+# next date
+#
+      MM=$((MM+1))
+      if (( $MM > 12 )) ; then
+         MM=$((MM-12))
+         YY=$((YY+1))
+      fi
+      BASETIME=$((100*YY+MM))
+done # endwhile BASETIME
+#
+# concatenate reference single month files MM_refe_YYYYMMDDTT.smon
+# to create files that contain all the months needed for the verification
+# The name will be MM_refe_YYYYMMDDTT
+#
+YY=$YY1
+while [[ $YY -le $YY2 ]] ; do
+      for MM in ${MM_LIST[*]} ; do
+          FC=1
+          \rm -f MM_refe_${YY}${MM}${DD}${TT}
+          while [[ $FC -le $NMON ]] ; do
+                YYM=$YY
+                CM=$((MM+FC-1))
+                FCM=$CM
+                if [[ $CM -ge 12 ]] ; then
+                   MMR=$(((CM-1)/12))
+                   FCM=$((CM-(MMR*12)))
+                   YYM=$((YYM+MMR))
+                fi
+                echo MM_refe_${YYM}${FCM}${DD}${TT}.smon
+                cat MM_refe_${YYM}${FCM}${DD}${TT}.smon >> MM_refe_${YY}${MM}${DD}${TT}
+                FC=$((FC+1))
+          done # endwhile FC
+      done # MM loop
+      YY=$((YY+1))
+done # endwhile YY
+#
+echo "end get_ref"
+#

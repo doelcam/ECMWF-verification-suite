@@ -1,0 +1,32 @@
+YY=1959
+while [[ $YY -le 2001 ]] ; do
+      \rm -f ANOM_mm02_1959-2001_11_228_000_${YY}
+      m=0
+      for exp in OlfpwEcnrm OegrrEukmo OecmfEscwf ; do
+          mem=0
+          \rm -f toto_tmp toto_out
+          while [[ $mem -le 8 ]] ; do
+                \rm -f toto_tmp
+cat>mars_req<<EOF
+read,
+source=ANOM_Cdm${exp}S000M001_1959-2001_110100_CV01_I1_228_000_${YY},
+number=$mem,
+target=toto_tmp
+EOF
+                mars mars_req
+cat>nam_chhea<<EOF
+ &USHEAD
+    IUSEC1(42)=${m},
+ /
+EOF
+                \rm -f grib_out
+                /usr/local/lib/metaps/bin/Dchange_grib nam_chhea toto_tmp grib_out
+                cat grib_out >> toto_out
+                m=$((m+1)) 
+                mem=$((mem+1)) 
+          done
+          cat toto_out >> ANOM_mm02_1959-2001_11_228_000_${YY}
+      done
+      cp ANOM_mm02_1959-2001_11_228_000_${YY} /vol/demeter/verify/data/mm02/anom
+      YY=$((YY+1))
+done

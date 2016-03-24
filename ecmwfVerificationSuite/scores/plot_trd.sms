@@ -1,0 +1,420 @@
+%manual
+NAME
+
+  cal_trd - Plots maps of the trends
+
+DESCRIPTION
+
+  Plots maps of the trends of the ensemble-mean and the reference
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_trd.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+set -A DIAG_LIST TRD1
+#
+# Create gif directory, if not already existent
+#
+for ecdir in ${SMSGIF}/giffiles ; do
+    if [[ -a $ecdir ]] ; then
+       echo "directory for $ecdir exists already"
+    else
+       mkdir $ecdir
+    fi
+done
+#
+# Header for web page
+#
+TRD_GIF=1
+if [[ $TRD_GIF = 1 ]] ; then
+   if [[ -s ${SMSGIF}/PopBox/scripts/PopBox.js ]] ; then
+      echo "Java script present"
+   else
+      cp -r /home/rd/ney/SkinLayer/sh/PopBox/ ${SMSGIF}/.
+   fi
+cat>trd_map_$ie.html<<EOF
+<html><head>
+<title>Summary of maps with trends for experiment $ie</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+fi
+#
+ecdir=psfiles
+#
+# Get and compile fortran files
+#
+#\rm -f plot_trd.x
+if [[ -a plot_trd.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/plot_trd.f .
+      cp ${PATHSO}/tools.f .
+      cp ${PATHSO}/tools_plot.f .
+      pgf90 $COMPOP1 plot_trd.f tools.f tools_plot.f -o plot_trd.x $LINKLI2 $LINKLI1 $LINKLI3
+#     ld=""
+#     use newmagics++
+#     pgf90 $COMPOP1 -tp px plot_trd.f tools.f tools_plot.f -o plot_trd.x $LINKLI1 $MAGPLUSLIB_SHARED $LINKLI3
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l plot_trd.x
+#
+# Identification of experiments
+#
+if [[ $ie -lt $NUMMOD ]] ; then
+   export EXPID=${EXP_LIST[$ie]}
+   export TYPID=${TYP_LIST[$ie]}
+   export ORIID=${ORI_LIST[$ie]}
+   export CLAID=${CLA_LIST[$ie]}
+   export METID=${MET_LIST[$ie]}
+   export SYSID=${SYS_LIST[$ie]}
+   export STRID=${STR_LIST[$ie]}
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Create directories
+#
+    TARDIR="TRD_mod.${JOB_ID}"
+    \rm -rf ${TARDIR}
+    mkdir -p ${TARDIR}
+    cp plot_trd.x ${TARDIR}/.
+    cp LSM* ${TARDIR}/.
+    cd ${TARDIR}
+#
+# Check if the specific tar file already exists
+#
+    ECMISS_MOD=0 # This is 0 in case the tar file exists in ECFS
+    ROOT1=TRD_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+    ecp -o ec:${ECDISK_LONG}/${ecdir}/${ROOT1}_ps.tar . || echo "${ROOT1}_ps.tar is missing in ECFS"
+    if [[ -s ${ROOT1}_ps.tar ]] ; then
+       tar xvf ${ROOT1}_ps.tar
+       \rm -f ${ROOT1}_ps.tar
+       echo "WARNING: Files for the experiment already exist"
+       echo "If you want to create new ones, remove the tar file from ECFS"
+    else
+       ECMISS_MOD=1 # This is 1 because the whole tar archive will be created and archived
+       mkdir ${ecdir}
+       echo "All the files will be created and a new tar file archived"
+    fi
+    cd ..
+#
+    TARDIR="TRD_ref.${JOB_ID}"
+    \rm -rf ${TARDIR}
+    mkdir -p ${TARDIR}
+    cp plot_trd.x ${TARDIR}/.
+    cp LSM* ${TARDIR}/.
+    cd ${TARDIR}
+    ECMISS_REF=0 # This is 0 in case the tar file exists in ECFS
+    ROOTREF1=TRD_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+    ecp -o ec:${ECDISK}/data/refe/${ecdir}/${ROOTREF1}_ps.tar . || echo "${ROOTREF1}_ps.tar is missing in ECFS"
+    if [[ -s ${ROOTREF1}_ps.tar ]] ; then
+       tar xvf ${ROOTREF1}_ps.tar
+       \rm -f ${ROOTREF1}_ps.tar
+       echo "WARNING: Files for the reference already exist"
+       echo "If you want to create new ones, remove the tar file from ECFS"
+    else
+       ECMISS_REF=1 # This is 1 because the whole tar archive will be created and archived
+       mkdir ${ecdir}
+       echo "All the files will be created and a new tar file archived"
+    fi
+    cd ..
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ANO_PAR ]] ; do
+          PAR=${ANO_PAR[$iz]}
+          LEV=${ANO_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+# loop over lead time periods
+#
+          ip=0
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YYS -ge $YYE ]] ; then
+                ip=$((TOT_ALL_DIA+1))
+                echo "Skip precip"
+             fi
+          fi
+          while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                IAFCM=${ALL_IAFCM[$ip]}
+                IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostic tar files
+#
+                id=0
+                for DIAG in ${DIAG_LIST[*]} ; do
+                    EXEC=0
+                    NDAT=1 # NDAT will take the value 2 if some reference files are also necessary
+#
+# Check if all the ouput files exist
+#
+                    TARDIR=TRD_mod.${JOB_ID}
+                    ROOT2=TRD_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                    if [[ -s ${TARDIR}/${ecdir}/${FILE}.ps ]] ; then
+                       echo "${FILE}.ps exists"
+                    else
+                       EXEC=1
+                    fi
+                    TARDIR=TRD_ref.${JOB_ID}
+                    ROOT2=TRD_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                    if [[ -s ${TARDIR}/${ecdir}/${FILE}.ps ]] ; then
+                       echo "${FILE}.ps exists"
+                    else
+                       EXEC=1
+                       NDAT=2
+                    fi
+                    if [[ $FORCETRD = 1 ]] ; then
+                       EXEC=1
+                       NDAT=2
+                    fi
+#
+# Compute trends if necessary
+#
+cat > trd_plo_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  dia='${DIAG}',
+ /
+EOF
+                    if [[ $EXEC -eq 1 ]] ; then
+                       ECMISS_MOD=1 # The new tar file will have to be archived in ECFS
+                       TARDIR=TRD_mod.${JOB_ID}
+                       cd ${TARDIR}
+#
+                       if [[ -s ${ROOT1}.tar ]] ; then
+                          echo "Results already available"
+                       else
+                          ecp -o ec:${ECDISK_LONG}/trd/${ROOT1}.tar . || echo "${ROOT1}.tar missing in ECFS"
+                          tar xvf ${ROOT1}.tar
+                       fi
+#
+                       cp ../trd_plo_gen_$ie trd_plo_$ie
+                       ./plot_trd.x < trd_plo_$ie
+#
+# Collect results
+#
+                       ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                          echo "File ${ecdir}/${FILE}.ps correctly created"
+                       else
+                          echo "There is a problem; the file ${ecdir}/${FILE}.ps is supposed to exist"
+                          exit
+                       fi
+                       cd ..
+                    fi # endif compute for experiment
+#
+cat > trd_plo_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nens=1,
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='refe',
+  dia='${DIAG}',
+ /
+EOF
+                    if [[ $NDAT = 2 ]] ; then
+                       ECMISS_REF=1 # The new tar file will have to be archived in ECFS
+                       TARDIR=TRD_ref.${JOB_ID}
+                       cd ${TARDIR}
+#
+                       if [[ -s ${ROOTREF1}.tar ]] ; then
+                          echo "Results already available"
+                       else
+                          ecp -o ec:${ECDISK}/data/refe/trd/${ROOTREF1}.tar . || echo "${ROOTREF1}.tar missing in ECFS"
+                          tar xvf ${ROOTREF1}.tar
+                       fi
+#
+                       cp ../trd_plo_gen_$ie trd_plo_$ie
+                       ./plot_trd.x < trd_plo_$ie
+#
+# Collect results
+#
+                       ROOT2=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                          echo "File ${ecdir}/${FILE}.ps correctly created"
+                       else
+                          echo "There is a problem; the file ${ecdir}/${FILE}.ps is supposed to exist"
+                          exit
+                       fi
+                       cd ..
+                    fi # endif compute for reference
+#
+                    if [[ $TRD_GIF = 1 ]] ; then
+                       ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       TARDIR=TRD_mod.${JOB_ID}
+                       if [[ -s ${TARDIR}/${ecdir}/${FILE}.ps ]] ; then
+                          convert -rotate 90 ${TARDIR}/${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>trd_map_$ie.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+<span style="font-size:xx-small">$FILE.gif</span>
+</div>
+EOF
+                       else
+                          echo "File missing"
+                          exit
+                       fi
+                       ROOT2=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       TARDIR=TRD_ref.${JOB_ID}
+                       if [[ -s ${TARDIR}/${ecdir}/${FILE}.ps ]] ; then
+                          convert -rotate 90 ${TARDIR}/${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>trd_map_$ie.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+<span style="font-size:xx-small">$FILE.gif</span>
+</div>
+EOF
+                       else
+                          echo "File missing"
+                          exit
+                       fi
+                    fi
+                    id=$((id+1))
+                done # id loop
+                ip=$((ip+1))
+          done # ip endwhile
+          iz=$((iz+1))
+    done # iz endwhile
+#
+# Copy in ECFS if required
+#
+    TARDIR="TRD_mod.${JOB_ID}"
+    if [[ $TRD_ECST -eq 1 ]] ; then
+       if [[ $ECMISS_MOD = 1 ]] ; then
+          emkdir -p ec:/${ECDISK_LONG}/${ecdir}
+          cd ${TARDIR}
+          ROOT=TRD_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          tar -b 512 -cvf ${ROOT}_ps.tar ${ecdir}/.
+          ecp -o ${ROOT}_ps.tar ec:${ECDISK_LONG}/${ecdir}/
+          echmod 770 ec:${ECDISK_LONG}/${ecdir}/${ROOT}_ps.tar
+          \rm -f ${ROOT}_ps.tar
+          cd ..
+       fi
+    fi # ECSTORE
+    \rm -rf ${TARDIR}
+#
+    TARDIR="TRD_ref.${JOB_ID}"
+    if [[ $TRD_ECST -eq 1 ]] ; then
+       if [[ $ECMISS_REF = 1 ]] ; then
+          emkdir -p ec:${ECDISK}/data/refe/${ecdir}
+          cd ${TARDIR}
+          ROOT=TRD_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          tar -b 512 -cvf ${ROOT}_ps.tar ${ecdir}/.
+          ecp -o ${ROOT}_ps.tar ec:${ECDISK_LONG}/${ecdir}/
+          echmod 770 ec:${ECDISK_LONG}/${ecdir}/${ROOT}_ps.tar
+          \rm -f ${ROOT}_ps.tar
+          cd ..
+       fi
+    fi # ECSTORE
+    \rm -rf ${TARDIR}
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+if [[ $TRD_GIF = 1 ]] ; then
+cat>>trd_map_$ie.html<<EOF
+</br>
+</body>
+</html>
+EOF
+mv trd_map_$ie.html ${SMSGIF}/.
+fi
+#
+date
+echo "end of plot_trd.sms"
+#
+%include <tail.h>
+#

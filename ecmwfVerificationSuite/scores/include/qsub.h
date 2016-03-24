@@ -1,0 +1,6 @@
+:
+#SBATCH --qos=%QUEUE%
+#SBATCH --job-name=%TASK%
+#SBATCH --output=%LOGDIR%%SMSNAME%.%SMSTRYNO%
+#SBATCH --error=%LOGDIR%%SMSNAME%.%SMSTRYNO%
+#SBATCH --time=%CPUTIME%

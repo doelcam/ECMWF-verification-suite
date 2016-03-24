@@ -1,0 +1,16 @@
+%manual
+NAME
+
+  def - Holds the suit to give time to check the tasks
+
+DESCRIPTION
+
+  It gives enough time for the user to suspend or complete
+  specific tasks
+
+%end
+%include <head.h> 
+%include <trap.h>
+echo "Here we will pause for 30 seconds"
+sleep 5
+%include <tail.h> 

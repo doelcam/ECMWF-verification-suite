@@ -1,0 +1,346 @@
+%manual
+NAME
+
+  plot_rel_bar - Plots regional values of the probabilistic scores for dichotomous events
+
+DESCRIPTION
+
+  Plots bar diagrams of the probabilistic scores for dichotomous events for regional
+  areas for multi-forecast system predictions.
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_rel_bar.sms"
+date
+#
+%include <sms_vars.h>
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+
+export MAGPLUS_VERSION=new
+use magics++
+
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+typeset -Z2 PEVT NPRO
+typeset -Z5 NSAM
+NSAM=$BRV_NSAM
+set -A DIAG_LIST BSS BSI REL RES SHA ROC
+#
+#
+# Get and compile fortran files
+#
+\rm -f plot_rel_bar.x
+cp ${PATHSO}/plot_rel_bar.f .
+cp ${PATHSO}/tools.f .
+cp ${PATHSO}/tools_plot.f .
+
+pgf90 -g plot_rel_bar.f tools.f tools_plot.f -o plot_rel_bar.x $MAGPLUSLIB_SHARED $LINKLI1 $LINKLI3
+
+ls -ltr plo*.x
+#
+ecdir=psfiles
+#
+# In case of multi-model, plot for every model used
+#
+if [[ $MULTI -eq 1 ]] ; then
+   NUMCHECK=$NUMMOD
+else
+   NUMCHECK=$((NUMMOD-1))
+fi
+expl=""
+ensl=""
+typl=""
+ie=0
+while [[ $ie -le $NUMCHECK ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      if [[ $ie -lt $NUMMOD ]] ; then
+         export TYPID=${TYP_LIST[$ie]}
+         if [[ $TYPID = 0 ]] ; then
+            export ORIID=${ORI_LIST[$ie]}
+            export CLAID=${CLA_LIST[$ie]}
+            export METID=${MET_LIST[$ie]}
+            export SYSID=${SYS_LIST[$ie]}
+            export STRID=${STR_LIST[$ie]}
+         else
+            export ORIID=off
+            export CLAID=off
+            export METID=off
+            export SYSID=off
+            export STRID=off
+         fi
+         export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+         expl="${expl},'${EXPID_LONG}'"
+         ensl="${ensl},${NENS}"
+         typl="${typl},${TYPID}"
+         EXPM="'${EXPID_LONG}'"
+         NENM="${NENS}"
+         TYPM="${TYPID}"
+         NMOD=1
+      else
+%include <sms_vars.h>
+%include <def_exp3.h>
+#        EXPM="${expl},'${EXPID_LONG}'"
+#        NENM="${ensl},${NENS}"
+#        TYPM="${typl},${TYPID}"
+#        NMOD=$((NUMMOD+1))
+         EXPM="'${EXPID_LONG}'"
+         NENM="${NENS}"
+         TYPM="${TYPID}"
+         NMOD=1
+      fi
+#
+      if [[ $BRV_IPRB = 0 ]] ; then
+         NPRO=$BRV_NPRO
+      else
+         NPRO=$((NENS+1))
+      fi
+#
+      if [[ $NMOD -lt 10 ]] ; then
+         n=$NMOD
+         while [[ $n -lt 10 ]] ; do
+               EXPM="${EXPM},'none'"
+               NENM="${NENM},999"
+               TYPM="${TYPM},999"
+               n=$((n+1))
+         done
+      fi
+      EXPM=${EXPM#,}
+      NENM=${NENM#,}
+      TYPM=${TYPM#,}
+#
+# Loop over months
+#
+      im=0
+      for MM in ${MM_LIST[*]} ; do
+          DD=${DD_LIST[$im]}
+          TT=${TT_LIST[$im]}
+#
+          TARDIR="BRV.${JOB_ID}"
+          \rm -rf ${TARDIR}
+          mkdir -p ${TARDIR}
+          cp plot_rel_bar.x ${TARDIR}/.
+          cp reglist_139 ${TARDIR}/.
+          cp reglist_std ${TARDIR}/.
+          cd ${TARDIR}
+#
+# Check if the specific tar file already exists
+#
+          ROOT1=${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          TARFILE=BRV_${ROOT1}
+          ECMISS=0 # This is 0 in case the tar file exists in ECFS
+          ecp -o ec:${ECDISK_LONG}/${ecdir}/${TARFILE}_ps.tar . || echo "${TARFILE}_ps.tar missing in ECFS"
+          if [[ -s ${TARFILE}_ps.tar ]] ; then
+             tar xvf ${TARFILE}_ps.tar
+             \rm -f ${TARFILE}_ps.tar
+             echo "WARNING: Files for the experiment already exist"
+             echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+          else
+             mkdir ${ecdir}
+             ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+             echo "All the files will be created and a new tar file archived"
+          fi
+#
+# Loop over fields
+#
+          iz=0
+          while [[ $iz -le $TOT_ALL_PAR ]] ; do
+                PAR=${ALL_PAR[$iz]}
+                LEV=${ALL_LEV[$iz]}
+                YYS=$YY1
+                YYE=$YY2
+                if [[ $PAR = 228 ]] ; then
+                   if [[ $YY1 -lt $YY1_228 ]] ; then
+                      YYS=$YY1_228
+                   fi
+                fi
+                ROOT2=${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+#
+# Copy archive with the output of calculations
+#
+                if [[ -s BRV_${ROOT2}.tar ]] ; then
+                   echo "Results already available"
+                else
+                   ecp -o ec:${ECDISK_LONG}/rel/BRV_${ROOT2}.tar . || echo "BRV_${ROOT1}.tar missing in ECFS"
+                   tar xvf BRV_${ROOT2}.tar
+                fi
+#
+# Loop over lead time periods
+#
+                ip=0
+                while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                      IAFCM=${ALL_IAFCM[$ip]}
+                      IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostics
+#
+                      id=0
+                      for DIAG in ${DIAG_LIST[*]} ; do
+                          plot_bar=1
+                          DIA_REG=""
+                          for REG in ${ALL_REG[*]} ; do
+                              do_reg=1
+                              for PEVT in ${PEVT_LIST[*]} ; do
+                                  FILE=${DIAG}_${ROOT2}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                                  if [[ $BRV_BOOT -eq 1 ]] ; then
+                                     FILE=${FILE}_S${NSAM}
+                                  fi
+                                  FILE=${FILE}_bar
+                                  if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                     echo "The file ${FILE}.ps already exists"
+                                  else
+                                     echo "The file ${FILE}.ps will be created"
+                                     do_reg=2
+                                  fi
+                              done #PEVT
+                              if [[ $FORCEBRV = 1 ]] ; then
+                                 do_reg=2
+                              fi
+                              if [[ $do_reg == 2 ]] ; then
+                                 DIA_REG="${DIA_REG} ${REG}"
+                                 plot_bar=2
+                              fi
+                          done #REG loop
+#
+                          set -A DIA_REG $DIA_REG
+                          REG_LST=""
+                          n=0
+                          while [[ $n -lt $TOT_REG ]] ; do
+                                REG_LST="${REG_LST} 0"
+                                n=$((n+1))
+                          done
+                          set -A REG_LST $REG_LST
+                          if [[ $plot_bar -eq 2 ]] ; then
+                             for REG in ${DIA_REG[*]} ; do
+                                 n=0
+                                 while [[ $n -lt $TOT_REG ]] ; do
+                                       if [[ ${REG_NAM[$n]} == $REG ]] ; then
+                                          REG_LST[$n]=1
+                                       fi
+                                       n=$((n+1))
+                                 done
+                             done
+                          fi
+                          rcal=""
+                          n=0
+                          while [[ $n -lt $TOT_REG ]] ; do
+                                rcal="${rcal} ${REG_LST[$n]},"
+                                n=$((n+1))
+                          done
+cat > prel_regcal << EOF
+rcal=${rcal}
+ /
+EOF
+#
+cat > plo_rel_gen << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nenm=${NENM},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expm=${EXPM},
+  typm=${TYPM},
+  nmod=${NMOD},
+  mult=${MULTI},
+  dia='${DIAG}',
+  nevt=${BRV_NEVT},
+  pevt=${BRV_PEVT},
+  permeth=${BRV_PERM},
+  boot=${BRV_BOOT},
+  nsam=${BRV_NSAM},
+  iprb=${BRV_IPRB},
+  npro=${BRV_NPRO},
+  topth=${BRV_TOPTH},
+  botth=${BRV_BOTTH},
+EOF
+cat > plo_rel_nre << EOF
+  nreg=${TOT_REG},
+EOF
+cat > plo_rel_end << EOF
+ /
+EOF
+                          if [[ $plot_bar -eq 2 ]] ; then
+                             if [[ $PAR -eq 139 ]] ; then
+                                cat plo_rel_gen plo_rel_nre plo_rel_end reglist_139 prel_regcal > plo_rel_bar
+                             else
+                                cat plo_rel_gen plo_rel_nre plo_rel_end reglist_std prel_regcal > plo_rel_bar
+                             fi
+                             cat plo_rel_bar
+#
+                             ./plot_rel_bar.x < plo_rel_bar
+                             ECMISS=1 # The new tar file will have to be archived in ECFS
+#
+# Collect results if a new file has been produced
+#
+                             for PEVT in ${PEVT_LIST[*]} ; do
+                                 ir=0
+                                 for REG in ${DIA_REG[*]} ; do
+                                     FILE=${DIAG}_${ROOT2}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                                     if [[ $BRV_BOOT -eq 1 ]] ; then
+                                        FILE=${FILE}_S${NSAM}
+                                     fi
+                                     FILE=${FILE}_bar
+                                     if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                        echo "File ${ecdir}/${FILE}.ps has been correctly created"
+                                     else
+                                        echo "There is a problem; ${ecdir}/${FILE}.ps is supposed to exist"
+                                        exit
+                                     fi
+                                     ir=$((ir+1))
+                                 done #REG loop
+                             done #PEVT loop
+                          fi
+                          id=$((id+1))
+                      done #id (diagnostics)
+                      ip=$((ip+1))
+                done #ip (lead time periods)
+                iz=$((iz+1))
+          done #iz
+#
+# Copy in ECFS if required; only do it if ECSTORE is 1 and either the tar file was 
+# previously missing or a new postscript file has been created
+#
+          TARFILE=BRV_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          if [[ $BRV_ECST -eq 1 ]] ; then
+             if [[ $ECMISS -eq 1 ]] ; then
+                tar -b 512 -cvf ${TARFILE}_ps.tar ${ecdir}/.
+                emkdir -p ec:${ECDISK_LONG}/${ecdir}/
+                ecp -o ${TARFILE}_ps.tar ec:${ECDISK_LONG}/${ecdir}/
+                echmod 770 ec:${ECDISK_LONG}/${ecdir}/${TARFILE}_ps.tar
+                \rm -f ${TARFILE}_ps.tar
+             fi
+          fi # ECSTORE
+          cd ..
+          \rm -rf ${TARDIR}
+#
+          echo "End of start date "$MM
+          im=$((im+1))
+      done #im
+      ie=$((ie+1))
+done #ie
+#
+date
+echo "end of plot_rel_bar.sms"
+#
+%include <tail.h>

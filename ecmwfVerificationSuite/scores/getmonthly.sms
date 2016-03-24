@@ -1,0 +1,85 @@
+%manual
+NAME
+
+  getmonthly - Retrieves monthly mean fields
+
+DESCRIPTION
+
+  Obtains the monthly means from either MARS or ECFS and copies
+  them in the working directory
+
+%end
+%include <head.h> 
+%include <trap.h>
+echo "start of getdata.sms"
+date
+#
+%include <sms_vars.h> 
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+
+
+# DMac GRIBEX FIX
+
+# export MARS_GRIBEX=1 doesn't work at teh minute because of wrong path
+
+
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+# Get individual model data
+#
+ie=0
+RET_REF=0
+while [[ $ie -lt $NUMMOD ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      export TYPID=${TYP_LIST[$ie]}
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+      export NENS=${NEN_LIST[$ie]}
+      if [[ $TYPID -eq 0 ]] ; then
+%include <def_exp1.h>
+cat>get_exp<<\_eof_get_exp
+%include <get_exp>
+_eof_get_exp
+         chmod +x get_exp
+         . ./get_exp
+         RET_REF=1
+      else
+         echo "Request for multi-model or not requested monthly means for experiment; skip retrieval"
+      fi
+      ie=$((ie+1))
+done # ie loop
+#
+# Get reference data
+#
+if [[ $RET_REF = 1 ]] ; then
+cat>get_ref<<\_eof_get_ref
+%include <get_ref>
+_eof_get_ref
+   chmod +x get_ref
+   . ./get_ref
+else
+   echo "No need to copy the reference monthly mean files"
+fi
+#
+date
+echo "end of getmonthly.sms"
+#
+%include <tail.h> 

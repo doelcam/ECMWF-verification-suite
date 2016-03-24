@@ -1,0 +1,117 @@
+cat<<\EOJ>job
+#!/bin/ksh
+# ----------------------------------------------------
+# Setting up the parameters for loadleveler
+# ----------------------------------------------------
+#!/bin/ksh
+#
+#$ -S /usr/bin/ksh
+        # Specifies the shell that parses the script. If not
+        # specified, your login shell will be used.
+#$ -q serial
+        # Specifies that your job should be run in the queue
+        # serial
+#$ -N wricru
+        # Assigns the specified name to the request
+#$ -o /scratch/rd/nep/waitqueue/$JOB_NAME.$HOSTNAME.$JOB_ID.out
+        # Specifies the name and location of STDOUT. If not given
+        # then the default filename is $JOBNAME.o$JOB_ID.
+        # The file will be written in your $HOME directory,
+        # by default.
+#$ -j y
+        # Join STDERR and STDOUT streams
+#$ -V
+        # Specifies that all environment variables from your shell
+        # should be used. You can also list individual variables which
+        # should be separated with semicolons.
+#$ -m a
+        # Specifies that email should be sent in case the job aborts.
+        # Other options include beginning (-mb), ends (-me), never (-mn)
+        # and suspended (-ms) (options can be combined).
+        # The default is never (-mn).
+#$ -M ${USER}@ecmwf.int
+        # Specifies the address(es) to which any email should
+        # be sent.
+#-------------------------------
+# setting environment variables
+#-------------------------------
+echo "beginning of wri_cru" 
+#
+# Script to create the CRU GRIB files
+#
+trap "ls -l" 0 1 2 15
+date
+set -evx
+#
+WORKDIR="/scratch/rd/nep/data"
+WORKDIR=$SCRATCHDIR
+cd $WORKDIR
+#
+# Where the source fortran files are
+#
+PATHTOOL="/home/ne/nep/sms/verify/scores/include/cru"
+#
+# Where the CRU data are
+#
+PATHDATA="/ENSEMBLES/verify/data/cru"
+#
+# Where the CRU data are
+#
+PATHOUT="/ENSEMBLES/verify/data/refe/cru"
+#
+# Copy and compile the source files for the current platform
+#
+FORT='pgf90 -pg -g -C -Mbounds -Ktrap=fp -O3'
+cp ${PATHTOOL}/wri_cru.f .
+${FORT} wri_cru.f -o wri_cru.x $EMOSLIB
+ls -l *.x
+#
+# Get the CRU data
+#
+\rm -f cru_ts_2_10*
+ecp ec:${PATHDATA}/cru_ts2.1.tar .
+tar -xvf cru_ts2.1.tar
+\rm -f cru_ts2.1.tar
+gunzip *gz
+#
+# Get the model support data
+#
+ecp -o ec:/ENSEMBLES/verify/data/ecmf/en/2001/s001/m001/MM_CenOecmfE2001S001M001_2005050100 .
+mars<<EOF
+read,
+source=MM_CenOecmfE2001S001M001_2005050100,
+param=228,
+fcmonth=1,
+number=0,
+target=MM_in
+EOF
+#
+#export GRIBEX_DEBUG=ON
+./wri_cru.x
+ls -l
+#
+# Interpolate into the common grid and store
+#
+typeset -Z4 YY
+typeset -Z2 MM
+YY=1951
+while [[ $YY -le 2002 ]] ; do
+      MM=1
+      while [[ $MM -le 12 ]] ; do
+mars<<EOF
+read,
+   source=228_000_${YY}${MM}_m,
+   grid=2.5/2.5,
+   area=87.5/0./-87.5/357.5,
+   target=228_000_${YY}${MM}0100
+EOF
+            ecp -o 228_000_${YY}${MM}0100 ec:${PATHOUT}/.
+            echmod 755 ec:${PATHOUT}/228_000_${YY}${MM}0100
+            MM=$((MM+1))
+      done # MM loop
+      YY=$((YY+1))
+done # YY loop
+#
+EOJ
+qsub job
+rm -f job

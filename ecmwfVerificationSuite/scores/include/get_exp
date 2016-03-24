@@ -1,0 +1,845 @@
+#
+#----------------------------------------------------
+# script to get monthly mean hindcast data from mars
+#----------------------------------------------------
+#
+set +e
+set -vx
+#
+echo "start get_exp for EXPVER = "$EXPID
+#
+typeset -Z2 MM
+typeset -Z3 SYSIDdef METIDdef
+#
+pwd
+#
+# Dates
+#
+BASETIME=$((YY1*100+ALL_MON[0])) # First date required
+YYE=$YY2
+MME=${ALL_MON[$((NUMSEA-1))]} # Last start date of every year
+ENDDAT=$((YYE*100+MME))       # Last date required
+YY=`echo $BASETIME | cut -c1-4`
+MM=`echo $BASETIME | cut -c5-6`
+DD=$DD1
+TT=$TT1
+#
+# Get and compile fortran files
+#
+\rm -f uv2div.x
+cp ${PATHSO}/uv2div.f .
+cp ${PATHSO}/tools.f .
+#pgf90 $COMPOP1 uv2div.f tools.f -o uv2div.x $LINKLI1 $LINKLI3
+gfortran $COMPOP1 uv2div.f tools.f -o uv2div.x $LINKLI1
+ls -l *.x
+#
+NUMBER=$((NENS-1))
+im=0
+while (( $BASETIME <= $ENDDAT )) ; do
+      CC=`echo $BASETIME | cut -c1-2`
+#
+# Check the number of variables actually used and construct the
+# list for the MARS request
+#
+
+LSPAR=039 #to fix the land surface moisture sea ponts
+#LSPAR=XXX
+module load cdo
+
+#----------------------------------
+# Get land surface mask
+
+cat > bar << EOF
+retrieve,
+number=0,
+date=1981-05-01,
+time=00:00:00,
+stream=mmsf,
+origin=ecmf,
+step=0,
+levtype=sfc,
+expver=0001,
+method=1,
+system=4,
+class=od,
+type=fc,
+param=172.128,
+grid=2.5/2.5,
+area=${north}/${east}/${south}/${west},
+target=lsmask
+EOF
+mars bar
+
+numpar=0
+mars_sfc_par=""
+mars_pl_par=""
+mars_pl_lev=""
+mars_sfc_tab=""
+mars_sfc_fab=""
+mars_pl_tab=""
+mars_pl_fab=""
+
+iz=0
+while [[ $iz -le $TOT_ALL_PAR ]] ; do
+ PAR=${ALL_PAR[$iz]}
+ LEV=${ALL_LEV[$iz]}
+ LTY=${ALL_LTY[$iz]}
+ TAB=${ALL_TAB[$iz]}
+ FAB=${ALL_FAB[$iz]}
+ if [[ ${PAR} -eq 228 ]] ; then
+  if [[ $YY -lt $YY1_228 ]] ; then
+   echo "Precipitation not available"
+  else
+   numpar=$((numpar+1))
+   mars_sfc_par="${mars_sfc_par} ${PAR}"
+   mars_sfc_tab="${mars_sfc_tab} ${TAB}"
+   mars_sfc_fab="${mars_sfc_fab} ${FAB}"
+  fi
+ else
+  numpar=$((numpar+1))
+  if [[ $LTY = sfc ]] ; then
+   mars_sfc_par="${mars_sfc_par} ${PAR}"
+   mars_sfc_tab="${mars_sfc_tab} ${TAB}"
+   mars_sfc_fab="${mars_sfc_fab} ${FAB}"
+  fi
+  if [[ $LTY = pl ]] ; then
+   mars_pl_par="${mars_pl_par} ${PAR}"
+   mars_pl_lev="${mars_pl_lev} ${LEV}"
+   mars_pl_tab="${mars_pl_tab} ${TAB}"
+   mars_pl_fab="${mars_pl_fab} ${FAB}"
+  fi
+ fi
+ #
+ iz=$((iz+1))
+done # iz loop over parameters
+
+set -A MARS_PL_LEV ${mars_pl_lev[*]}
+set -A MARS_SFC_TAB ${mars_sfc_tab[*]}
+set -A MARS_SFC_FAB ${mars_sfc_fab[*]}
+set -A MARS_PL_TAB ${mars_pl_tab[*]}
+set -A MARS_PL_FAB ${mars_pl_fab[*]}
+#
+echo "Number of parameters for this year is "$numpar
+idealsize=$((numpar*NENS*NMON))
+#
+
+
+# Always retrieve the file from ECFS
+# If the file has the right size, ret_any_field=1;
+# ret_any_field takes the value 2 if at least one field needs to
+# be retrieved from MARS during the execution.
+# In that case, the new MM-file has to be stored in ECFS
+#
+
+ret_any_field=1
+ret_all_field=1
+echo "Try to copy file from basic filesystem in ecfs"
+echo ec:${ECDISK_LONG}/MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} .
+ecp -o ec:${ECDISK_LONG}/MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} . || echo "model file missing"
+
+#--------------------------------------------------------------------------------------      
+#
+# Check if the file now exists and contains all the correct fields
+#
+\rm -f MM_tmp
+AVAIL_SFC=""
+AVAIL_PL=""
+
+if [[ -s MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} ]] ; then
+ if [[ $mars_sfc_par != "" ]] ; then
+  nmars=0
+  for PAR in ${mars_sfc_par[*]} ; do
+   TAB=${MARS_SFC_TAB[$nmars]}
+   FAB=${MARS_SFC_FAB[$nmars]}
+   
+   if [[ $FAB -eq 1 ]] ; then
+    MARS_PAR=${PAR}.${TAB}
+   else
+    MARS_PAR=${PAR}
+   fi
+   
+  \rm -f single_field
+  
+mars<<EOM
+read,
+source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+param=${MARS_PAR},
+fcmonth=1/to/$NMON,
+number=0/to/${NUMBER},
+grid=2.5/2.5,
+area=${north}/${east}/${south}/${west},
+target=single_field
+EOM
+
+   if [[ -s single_field ]] ; then
+		
+    if [[  $PAR = @(039|040|041|042) ]] ; then   # a fix here to set all sea points to missing values
+cat>fixSM<<EOM
+read,
+ source="single_field",
+ fieldset=orig
+read,
+ source="lsmask",
+ fieldset=lsmask
+compute,
+ accuracy = 16,
+ fieldset=bm,
+ formula="bitmap(lsmask,0)"
+compute,
+ fieldset=new,
+ formula="bitmap(orig,bm)"
+write,
+ fieldset=new,
+ target="toto" 
+EOM
+
+     mars fixSM
+     mv toto single_field
+     
+     
+    fi
+     
+#cat>fixSM<<EOM				  
+#read,
+# source=lsmask,
+# fieldset=lsm
+#read,
+# source=single_field,				  
+# fieldset=sm
+#compute,
+#  fieldset=sm0,
+#  formula="(lsm=0.0)*9999 + (sm>0.0)*sm"
+#write,
+#  fieldset=sm0,
+#  target=toto
+#EOM
+#
+#     mars fixSM
+#     rm single_field
+#     mv toto single_field
+ 	
+	
+
+
+    nfields=$((NMON*NENS))
+    grib_ls single_field>toto.lst
+    tail -1 toto.lst|read -d o nretrieved
+    
+    if [[ $nfields = $nretrieved ]] ; then
+     cat single_field >> MM_tmp
+     AVAIL_SFC="${AVAIL_SFC} 1"
+    else
+     AVAIL_SFC="${AVAIL_SFC} 0"
+    fi
+   else
+    AVAIL_SFC="${AVAIL_SFC} 0"
+   fi
+   
+   nmars=$((nmars+1))
+  done # Surface parameter loop
+ fi    # if (there are any surface parameters) loop 
+ 
+ if [[ $mars_pl_par != "" ]] ; then
+  nmars=0
+  for PAR in ${mars_pl_par[*]} ; do
+   LEV=${MARS_PL_LEV[$nmars]}
+   TAB=${MARS_PL_TAB[$nmars]}
+   FAB=${MARS_PL_FAB[$nmars]}
+   
+   if [[ $FAB -eq 1 ]] ; then
+    MARS_PAR=${PAR}.${TAB}
+   else
+    MARS_PAR=${PAR}
+   fi
+   
+   \rm -f single_field
+   
+mars<<EOM
+read,
+source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+param=${MARS_PAR},
+levelist=${LEV},
+fcmonth=1/to/$NMON,
+number=0/to/${NUMBER},
+grid=2.5/2.5,
+area=${north}/${east}/${south}/${west},
+target=single_field
+EOM
+
+   if [[ -s single_field ]] ; then
+
+    nfields=$((NMON*NENS))
+    grib_ls single_field>toto.lst
+    tail -1 toto.lst|read -d o nretrieved
+    if [[ $nfields = $nretrieved ]] ; then
+     cat single_field >> MM_tmp
+     AVAIL_PL="${AVAIL_PL} 1"
+    else
+     AVAIL_PL="${AVAIL_PL} 0"
+    fi
+   else
+    AVAIL_PL="${AVAIL_PL} 0"
+   fi
+   
+   nmars=$((nmars+1))
+   
+  done # pressure level parameter loop
+ fi    # if (there are any pressure level parameters) loop
+
+
+ #/home/ma/emos/bin/${ARCH}/GRIB_profile MM_tmp > list0
+ #grib_ls MM_tmp > list0
+ #wc list0 > list1
+ #cut -c 1-8 list1 | read fakesize
+ #lastsize=$((fakesize-5))
+
+ lastsize=`grib_count MM_tmp`
+ echo $lastsize
+ if [[ $lastsize != $idealsize ]] ;then
+  echo "File of wrong size"
+  echo "The MM-file has too few fields"
+  ret_any_field=2
+ else
+  echo "File of exactly the size required"
+  echo "The data are stored in file MM_tmp"
+  ret_any_field=1
+  mv MM_tmp MM_${EXPID_LONG}_${YY}${MM}${DD}${TT}
+ fi
+	 
+else  # if the file doesn't exist
+ ret_any_field=2
+ ret_all_field=2
+
+ for PAR in ${mars_sfc_par[*]} ; do
+  AVAIL_SFC="${AVAIL_SFC} 0"
+ done
+
+ for PAR in ${mars_pl_par[*]} ; do
+  AVAIL_PL="${AVAIL_PL} 0"
+ done
+
+ NUMlst=""
+ NUM=0
+ while [[ $NUM -le $NUMBER ]] ; do
+  NUMlst="${NUMlst}/${NUM}"
+  NUM=$((NUM+1))
+ done # NUM loop
+ NUMlst="${NUMlst#/}"
+ 
+ 
+fi #  if (the MM file exists loop)
+
+#  finished checking if the MM file exists
+
+#---------------------------------------------------------------------------------
+# If some of the fields for the MM-file do not exist, the script will retrieve them
+#
+
+\rm -f MM_tmp mars_totalread
+cat>mars_req_gen<<EOM
+read,
+ source=MM_tmp,
+ target=to_be_pasted,
+EOM
+NUMBER=$((NENS-1))
+
+if [[ $ret_any_field -eq 2 ]] ; then
+ mars_sfc_228=""
+ mars_sfc_req=""
+ mars_pl_req=""
+ mars_lev_req=""
+ mars_pl_155=""
+ mars_lev_155=""
+ if [[ $AVAIL_SFC != "" ]] ; then
+  set -A AVAIL_SFC ${AVAIL_SFC[*]}
+ fi
+ if [[ $AVAIL_PL != "" ]] ; then
+ set -A AVAIL_PL ${AVAIL_PL[*]}
+ fi
+#
+# detect the parameters missing to make a single MARS retrieval
+#
+ echo "Read the fields one by one from the MM-file to detect the missing ones"
+ if [[ $mars_sfc_par != "" ]] ; then
+  nmars=0
+  for PAR in ${mars_sfc_par[*]} ; do
+   TAB=${MARS_SFC_TAB[$nmars]}
+   FAB=${MARS_SFC_FAB[$nmars]}
+   
+   if [[ $FAB -eq 1 ]] ; then
+    MARS_PAR=${PAR}.${TAB}
+   else
+    MARS_PAR=${PAR}
+   fi
+   
+   if [[ ${AVAIL_SFC[$nmars]} = 1 ]] ; then
+    \rm -f single_field
+    
+mars<<EOM
+read,
+source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+param=${MARS_PAR},
+fcmonth=1/to/$NMON,
+number=0/to/${NUMBER},
+target=single_field
+EOM
+      cat single_field >> MM_tmp
+      miss_field=1
+   else
+    \rm -f MM_tmp2
+    miss_field=1
+    
+    if [[ $ret_all_field = 1 ]] ; then
+     NUMlst=""
+     NUM=0
+     while [[ $NUM -le $NUMBER ]] ; do
+      MON=1
+      while [[ $MON -le $NMON ]] ; do
+       \rm -f single_field
+       
+cat>mars_req1<<EOM
+read,
+  source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+  target=single_field,
+EOM
+cat>mars_req2<<EOM
+  expver=${EXPID},
+  param=${MARS_PAR},
+  fcmonth=$MON,
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUM}
+EOM
+
+       cat mars_req1 mars_req2 > mars_req
+       mars mars_req
+
+
+       if [[ -s single_field ]] ; then
+
+
+	if [[  $PAR = @(039|040|041|042) ]] ; then   # a fix here to set all sea points to missing values
+	 echo "Fixing soil moisture sea points"
+cat>fixSM<<EOM
+read,
+ source="single_field",
+ fieldset=orig
+read,
+ source="lsmask",
+ fieldset=lsmask
+compute,
+ accuracy = 16,
+ fieldset=bm,
+ formula="bitmap(lsmask,0)"
+compute,
+ fieldset=new,
+ formula="bitmap(orig,bm)"
+write,
+ fieldset=new,
+ target="toto" 
+EOM
+
+     mars fixSM
+     mv toto single_field
+	fi
+
+
+
+
+
+	echo "Extraction succesful, the field exists in the MM-file"
+	cat single_field >> MM_tmp2
+       else
+	echo "The field does not exist in the MM-file and further action is required"
+	miss_field=2
+	echo "Retrieve field from mars"
+	cat mars_req_gen >> mars_totalread
+	cat mars_req2 >> mars_totalread
+       fi    #single_field loop
+
+       MON=$((MON+1))
+      done # MON loop
+
+      NUMlst="${NUMlst}/${NUM}"
+      NUM=$((NUM+1))
+     done # NUM loop
+
+     NUMlst="${NUMlst#/}"
+    else
+     miss_field=2
+    fi   # end of if ($ret_all_field=1 loop)
+
+    if [[ $miss_field = 2 ]] ; then
+     if [[ $PAR = 228 ]] ; then
+      mars_sfc_228="${MARS_PAR}"
+     else
+      mars_sfc_req="${mars_sfc_req}/${MARS_PAR}"
+     fi
+    else
+     cat MM_tmp2 >> MM_tmp
+    fi
+    
+   fi   # end of if ${AVAIL_SFC[$nmars]} = 1 ] loop
+
+   nmars=$((nmars+1))
+  done # mars surface parameter loop
+  
+  mars_sfc_req="${mars_sfc_req#/}"
+ fi    # if (there are any surface parameters) loop
+
+
+
+ # Now doing the same for pressure level parameters...
+
+ if [[ $mars_pl_par != "" ]] ; then
+  nmars=0
+
+  for PAR in ${mars_pl_par[*]} ; do
+   LEV=${MARS_PL_LEV[$nmars]}
+   TAB=${MARS_PL_TAB[$nmars]}
+   FAB=${MARS_PL_FAB[$nmars]}
+
+   if [[ $FAB -eq 1 ]] ; then
+    MARS_PAR=${PAR}.${TAB}
+   else
+    MARS_PAR=${PAR}
+   fi
+
+   if [[ ${AVAIL_PL[$nmars]} = 1 ]] ; then
+    \rm -f single_field
+mars<<EOM
+read,
+source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+param=${MARS_PAR},
+levelist=${LEV},
+fcmonth=1/to/$NMON,
+number=0/to/${NUMBER},
+target=single_field
+EOM
+    cat single_field >> MM_tmp
+    miss_field=1
+   else
+    \rm -f MM_tmp2
+    miss_field=1
+   
+    if [[ $ret_all_field = 1 ]] ; then
+     NUMlst=""
+     NUM=0
+     while [[ $NUM -le $NUMBER ]] ; do
+      MON=1
+      while [[ $MON -le $NMON ]] ; do
+       \rm -f single_field
+cat>mars_req1<<EOM
+read,
+  source=MM_${EXPID_LONG}_${YY}${MM}${DD}${TT},
+  target=single_field,
+EOM
+cat>mars_req2<<EOM
+  expver=${EXPID},
+  param=${MARS_PAR},
+  levelist=${LEV},
+  fcmonth=$MON,
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUM}
+EOM
+      cat mars_req1 mars_req2 > mars_req
+      mars mars_req
+      
+      if [[ -s single_field ]] ; then
+       echo "Extraction succesful, the field exists in the MM-file"
+       cat single_field >> MM_tmp2
+      else
+       echo "The field does not exist in the MM-file and further action is required"
+       miss_field=2
+       echo "Retrieve field from mars"
+       cat mars_req_gen >> mars_totalread
+       cat mars_req2 >> mars_totalread
+      fi
+      MON=$((MON+1))
+     done # MON loop
+     
+     NUMlst="${NUMlst}/${NUM}"
+     NUM=$((NUM+1))
+    done # NUM loop
+    
+    NUMlst="${NUMlst#/}"
+   else
+    miss_field=2
+   fi
+   if [[ $miss_field = 2 ]] ; then
+    if [[ $PAR = 155 ]] ; then
+     mars_pl_155="155"
+     mars_lev_155="${LEV}"
+    else
+     mars_pl_req="${mars_pl_req} ${MARS_PAR}"
+     mars_lev_req="${mars_lev_req} ${LEV}"
+    fi
+   else
+     cat MM_tmp2 >> MM_tmp
+   fi
+  fi
+  nmars=$((nmars+1))
+ done # pressure level parameter loop
+fi
+#
+# MARS retrieval of precipitation
+#
+         if [[ $mars_sfc_228 != "" ]] ; then
+            echo "retrieve total precip and change units to mm/day"
+            \rm -f 228_${YY}${MM} 228.tmp
+mars<<EOM
+retrieve,
+  use=infrequent,
+  type=fcmean,
+  method=$METID,
+  stream=$STRID,
+  class=$CLAID,
+  system=$SYSID,
+  origin=$ORIGIN,
+  expver=$EXPID,
+  levtype=sfc,
+  param=$mars_sfc_228,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  fcmonth=1/to/${NMON},
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUMlst},
+  target=228_${YY}${MM}
+EOM
+#
+cat > getdata << EOM
+read,
+  source=228_${YY}${MM},
+  param=228,
+  fieldset=ori
+
+compute,
+  fieldset=new,
+  formula="ori*86400*1000"
+
+write,
+  fieldset=new,
+  target=228.tmp
+EOM
+            if [[ -s 228_${YY}${MM} ]] ; then
+               mars<getdata
+            else
+               echo "Precipitation retrieval failed"
+            fi
+            \rm -f 228_${YY}${MM}
+            grib_set -r -sbitsPerValue=16 228.tmp 228_${YY}${MM}
+            cat 228_${YY}${MM} >> MM_tmp
+         fi
+#
+# MARS retrieval of u,v data for 155 calculation 
+# (only for DEMETER or ENSEMBLES) or direct 155 retrieval
+#
+         if [[ $mars_pl_155 != "" ]] ; then
+            for LEV in ${mars_lev_155[*]} ; do
+                \rm -f 155_${LEV}_${YY}${MM}
+                if [[ $CLAID = dm || $CLAID = en ]]; then
+                   echo "compute divergence from winds"
+cat > getdata << EOM
+retrieve,
+  use=infrequent,
+  type=fcmean,
+  method=$METID,
+  stream=$STRID,
+  class=$CLAID,
+  system=$SYSID,
+  origin=$ORIGIN,
+  expver=$EXPID,
+  param=131,
+  levtype=pl,
+  levelist=${LEV},
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  fcmonth=1/to/${NMON},
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUMlst},
+  target=131_${LEV}_${YY}${MM}
+retrieve,
+  param=132,
+  target=132_${LEV}_${YY}${MM}
+EOM
+                   mars<getdata
+                   ls -l 13*
+#
+                   echo "compute divergence from u and v"
+cat > nlist << EOF
+ &control
+   nx=${NX}
+   ny=${NY}
+   iyy=${YY}
+   imm=${MM}
+   ilev=${LEV}
+   expt='${EXPID}'
+   ybasedisk='${SMSWORK}'
+ /
+EOF
+                   ./uv2div.x < nlist
+                   \rm -f 131_${LEV}_${YY}${MM} 132_${LEV}_${YY}${MM}
+                   cat 155_${LEV}_${YY}${MM} >> MM_tmp
+                else
+cat > getdata << EOM
+retrieve,
+  use=infrequent,
+  type=fcmean,
+  method=$METID,
+  stream=$STRID,
+  class=$CLAID,
+  system=$SYSID,
+  origin=$ORIGIN,
+  expver=$EXPID,
+  param=${MARS_PAR},
+  levtype=pl,
+  levelist=${LEV},
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  fcmonth=1/to/${NMON},
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUMlst},
+  target=155_${mars_lev_155}_${YY}${MM}
+EOM
+                   mars<getdata
+                   cat 155_${mars_lev_155}_${YY}${MM} >> MM_tmp
+                fi
+            done
+         fi
+#
+# normal mars retrieval
+#
+cat>getdata<<EOM
+  type=fcmean,
+  method=$METID,
+  stream=$STRID,
+  class=$CLAID,
+  system=$SYSID,
+  origin=$ORIGIN,
+  expver=$EXPID,
+  grid=2.5/2.5,
+  area=${north}/${east}/${south}/${west},
+  fcmonth=1/to/${NMON},
+  date=${YY}${MM}${DD},
+  time=$TT,
+  number=${NUMlst}
+EOM
+         \rm -f mars_req total_sfc
+         i=0
+         if [[ $mars_sfc_req != "" ]] ; then
+cat>get_sfc<<EOM
+retrieve,
+  levtype=sfc,
+  use=infrequent,
+  param=${mars_sfc_req},
+  target=total_sfc,
+EOM
+            cat getdata >> get_sfc
+            cat get_sfc >> mars_req
+            i=1
+         fi
+         if [[ $mars_pl_req != "" ]] ; then
+            set -A MARS_LEV_REQ ${mars_lev_req[*]}
+            nmars=0
+            for PAR in ${mars_pl_req[*]} ; do
+                LEV=${MARS_LEV_REQ[$nmars]}
+                if [[ $i -eq 0 ]] ; then
+cat>get_pl<<EOM
+retrieve,
+  use=infrequent,
+  levtype=pl,
+  levelist=${LEV},
+  param=${PAR},
+  target=total_sfc,
+EOM
+                   cat getdata >> get_pl
+                   cat get_pl >> mars_req
+                   i=1
+                else
+cat>get_pl<<EOM
+retrieve,
+  use=infrequent,
+  levtype=pl,
+  levelist=${LEV},
+  param=${PAR},
+  target=total_sfc
+EOM
+                   cat get_pl >> mars_req
+                fi
+                nmars=$((nmars+1))
+            done
+         fi
+ 
+	 
+	 
+	 
+         if [[ $i -eq 1 ]] ; then
+            mars<mars_req
+            cat total_sfc >> MM_tmp
+         fi
+	 
+
+#
+          #/home/ma/emos/bin/${ARCH}/GRIB_profile MM_tmp > list0
+          #grib_ls MM_tmp > list0
+          #wc list0 > list1
+          #cut -c 1-8 list1 | read fakesize
+          #lastsize=$((fakesize-5))
+         lastsize=`grib_count MM_tmp`
+         echo $lastsize
+         if [[ $lastsize != $idealsize ]] ;then
+            echo "File of wrong size"
+            echo "The MM-file has too few fields"
+            exit
+         else
+            echo "File of exactly the size required"
+            echo "All the required data are stored in file MM_tmp"
+         fi
+	 
+ 
+#
+# MM_tmp contains all the fields that will be analyzed in the suite.
+# After retrieving all the required fields, identify the missing single
+# fields in the general MM-file that is stored into ECFS, take them 
+# from MM_tmp, cat into the MM-file and store again in ECFS
+# before renaming MM_tmp as the MM-file. This is done only if there
+# was an existing MM-file.
+#
+         if [[ -s MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} ]] ; then
+            echo "Read all the missing fields from MM_tmp"
+            mars mars_totalread
+            if [[ -s to_be_pasted ]] ; then
+               cat to_be_pasted >> MM_${EXPID_LONG}_${YY}${MM}${DD}${TT}
+            else
+               exit
+            fi
+         else
+            cp MM_tmp MM_${EXPID_LONG}_${YY}${MM}${DD}${TT}
+         fi
+         ls -l MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} MM_tmp
+#
+# copy modified/new file into ECFS if some retrieval has been done
+#
+         echo "The new MM-file is copied into ECFS, while the temporary file takes its name"
+         ecp -o MM_${EXPID_LONG}_${YY}${MM}${DD}${TT} ec:${ECDISK_LONG}/
+         echmod 770 ec:${ECDISK_LONG}/MM_${EXPID_LONG}_${YY}${MM}${DD}${TT}
+         mv MM_tmp MM_${EXPID_LONG}_${YY}${MM}${DD}${TT}
+      fi # endif for retrieving missing files
+#
+# next date
+#
+      im=$((im+1))
+      if [[ $im -ge $NUMSEA ]] ; then
+         im=0
+         YY=$((YY+1))
+      fi
+      MM=${MM_LIST[$im]}
+      BASETIME=$((100*YY+MM))
+done # endwhile BASETIME
+#
+echo "end get_exp"
+#

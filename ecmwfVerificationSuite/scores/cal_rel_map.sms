@@ -1,0 +1,312 @@
+%manual
+NAME
+
+  cal_rel_map - Computes probabilistic scores for dichotomous events
+
+DESCRIPTION
+
+  Computes the grid-point reliability, resolution, Brier score,
+  ROC and value
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_rel_map.sms"
+#
+%include <sms_vars.h>
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST BSS BSI REL RES SHA ROC IGN
+typeset -Z2 PEVT NPRO
+typeset -Z5 NSAM
+NSAM=$BRV_NSAM
+GRIB_GRIBEX_MODE_ON=1
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+#if [[ $ie -ne 0 ]] ; then
+#   sleep 300
+#fi
+
+
+#
+# Get and compile fortran files
+#
+#rm -f cal_rel*.x
+if [[ -a cal_rel_map.x ]] ; then
+   echo "Executable file present"
+else
+#   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_rel_map.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_rel_map.f tools.f -o cal_rel_map.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_rel_map.f tools.f -o cal_rel_map.x $LINKLI1 $LINKLI3
+      echo "compiled"
+#   else
+#      echo "Compile by hand"
+#   fi
+fi
+ls -l cal_rel*.x
+#
+if [[ $ie -lt $NUMMOD ]] ; then
+   export EXPID=${EXP_LIST[$ie]}
+   export TYPID=${TYP_LIST[$ie]}
+   if [[ $TYPID = 0 ]] ; then
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+   else
+      export ORIID=off
+      export CLAID=off
+      export METID=off
+      export SYSID=off
+      export STRID=off
+   fi
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+if [[ $BRV_IPRB = 0 ]] ; then
+   NPRO=$BRV_NPRO
+else
+   NPRO=$((NENS+1))
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Loop over fields
+#
+        iz=0
+        while [[ $iz -le $TOT_ANO_PAR ]] ; do
+              PAR=${ANO_PAR[$iz]}
+              LEV=${ANO_LEV[$iz]}
+              YYS=$YY1
+              YYE=$YY2
+              if [[ $PAR = 228 ]] ; then
+                 if [[ $YY1 -lt $YY1_228 ]] ; then
+                    YYS=$YY1_228
+                 fi
+              fi
+#
+#
+
+# Loop over diagnostic tar files
+#
+    ECMISS=0 # This is 0 in case the tar file exists in ECFS
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}.${JOB_ID}
+
+	ROOT=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+        mkdir -p ${TARDIR}
+        cd ${TARDIR}
+        TARFILE=${ROOT}
+        ecp -o ec:${ECDISK_LONG}/rel/${TARFILE}.tar . || echo "${TARFILE}.tar is missing in ECFS"
+        if [[ -s ${TARFILE}.tar ]] ; then
+           tar xvf ${TARFILE}.tar
+           \rm -f ${TARFILE}.tar
+           echo "WARNING: Files for the experiment already exist"
+           echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+        else
+           echo "All the files will be created and a new tar file archived"
+           ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+        fi
+        cd ..	
+	id=$((id+1))
+    done  #DIAG
+	
+#
+# loop over lead time periods
+#
+              ip=0
+              while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                    IAFCM=${ALL_IAFCM[$ip]}
+                    IEFCM=${ALL_IEFCM[$ip]}
+#
+# Check if all the ouput files exist
+#
+                id=0
+                for DIAG in ${DIAG_LIST[*]} ; do
+                    TARDIR=${DIAG}.${JOB_ID}
+                    ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    compute_map=1
+		    
+                    for PEVT in ${PEVT_LIST[*]} ; do
+#
+                        FILE=${ROOT2}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+                              
+		        if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                           echo "${FILE}.grb exists"
+		    	    \rm -r ${TARDIR}/${FILE}.grb
+			     echo "deleting file and recomupting"
+			     compute_map=2
+                        else
+                           compute_map=2
+                        fi
+                        if [[ $BRV_BOOT -eq 1 ]] ; then
+                           if [[ -s ${TARDIR}/${FILE}_S${NSAM}.grb ]] ; then
+                              echo "${FILE}_S${NSAM}.grb exists"
+		    	      \rm -r ${TARDIR}/${FILE}_S${NSAM}.grb
+			      echo "deleting file and recomupting"
+			      compute_map=2
+                           else
+                              compute_map=2
+                           fi
+                        fi
+                    done # PEVT loop
+                    if [[ $FORCEBRV = 1 ]] ; then
+                       compute_map=2
+                    fi
+		 done #DIAG
+#
+# Compute probabilistic score files if necessary
+#
+cat > rel_map_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nevt=${BRV_NEVT},
+  pevt=${BRV_PEVT},
+  permeth=${BRV_PERM},
+  boot=${BRV_BOOT},
+  nsam=${BRV_NSAM},
+  iprb=${BRV_IPRB},
+  npro=${BRV_NPRO},
+  topth=${BRV_TOPTH},
+  botth=${BRV_BOTTH},
+ /
+EOF
+
+                    if [[ $compute_map -eq 2 ]] ; then
+                       ECMISS[$id]=1 # The new tar file will have to be archived in ECFS
+                       cat rel_map_$ie > rel_map_list_$ie
+                       ./cal_rel_map.x < rel_map_list_$ie
+#
+# Collect results
+#
+		id=0
+		for DIAG in ${DIAG_LIST[*]} ; do
+		       TARDIR=${DIAG}.${JOB_ID}
+                       for PEVT in ${PEVT_LIST[*]} ; do
+              		   ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+                           FILE2=${ROOT2}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+                           if [[ -s ${FILE2}.grb ]] ; then
+                              mv ${FILE2}.grb ${TARDIR}/.
+                           else
+			      echo "The file ${FILE2}.grb is supposed to exist"
+                              exit
+                           fi
+			   
+			   if [[ $DIAG != 'REL' && $DIAG != 'RES' && $DIAG != 'SHA' ]] ; then
+			   			   
+	                           if [[ $BRV_BOOT -eq 1 ]] ; then # Include the bootstrap files too
+        	                      if [[ -s ${FILE2}_S${NSAM}.grb ]] ; then
+        	                         mv ${FILE2}_S${NSAM}.grb ${TARDIR}/.
+        	                      else
+        	                         echo "The file ${FILE2}_S${NSAM}.grb is supposed to exist"
+        	                         exit
+        	                      fi
+        	                   fi
+			   fi
+	               done # PEVT loop
+		 done # DIAG loop
+		     
+                    fi
+                    ip=$((ip+1))
+              done # ip endwhile
+	     
+#
+# Copy in ECFS if required
+#
+
+	id=0
+	for DIAG in ${DIAG_LIST[*]} ; do
+	for PEVT in ${PEVT_LIST[*]} ; do
+		TARDIR=${DIAG}.${JOB_ID}
+        	ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+		TARFILE=${ROOT}
+              if [[ $BRV_ECST -eq 1 ]] ; then
+                 emkdir -p ec:${ECDISK_LONG}/rel
+                 if [[ ${ECMISS} -eq 1 ]] ; then
+                    cd ${TARDIR}
+                    tar -b 512 -cvf ../${TARFILE}.tar .
+                    cd ..
+                    ecp -o ${TARFILE}.tar ec:${ECDISK_LONG}/rel/
+                    echmod 770 ec:${ECDISK_LONG}/rel/${TARFILE}.tar
+                    \rm -f ${TARFILE}.tar
+                 fi
+              fi # ECSTORE
+              
+	done # PEVT     
+        \rm -rf ${TARDIR}
+	done # DIAG
+        iz=$((iz+1))
+    done # iz endwhile
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_rel_map.sms"
+#
+%include <tail.h>
+#

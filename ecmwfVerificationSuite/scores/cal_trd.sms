@@ -1,0 +1,306 @@
+%manual
+NAME
+
+  cal_trd - Computes trends
+
+DESCRIPTION
+
+  Computes the grid-point trend for experiments and reference
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_trd.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+DIAG=TRD
+set -A DIAP_LIST TRD1
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Get and compile fortran files
+#
+#\rm -f cal_trd.x
+if [[ -a cal_trd.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_trd.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_trd.f tools.f -o cal_trd.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_trd.f tools.f -o cal_trd.x $LINKLI1 $LINKLI3
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_trd.x
+#
+# Identification of experiments
+#
+if [[ $ie -lt $NUMMOD ]] ; then
+   export EXPID=${EXP_LIST[$ie]}
+   export TYPID=${TYP_LIST[$ie]}
+   export ORIID=${ORI_LIST[$ie]}
+   export CLAID=${CLA_LIST[$ie]}
+   export METID=${MET_LIST[$ie]}
+   export SYSID=${SYS_LIST[$ie]}
+   export STRID=${STR_LIST[$ie]}
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Check tar files
+#
+    ECMISS_MOD=0 # This is 0 in case the tar file exists in ECFS
+    TARDIR=${DIAG}_mod.${JOB_ID}
+    \rm -rf ${TARDIR}
+    mkdir ${TARDIR}
+    cd ${TARDIR}
+    ROOT1=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+    ecp -o ec:${ECDISK_LONG}/trd/${ROOT1}.tar . || echo "${ROOT1}.tar is missing in ECFS"
+    if [[ -s ${ROOT1}.tar ]] ; then
+       tar xvf ${ROOT1}.tar
+       \rm -f ${ROOT1}.tar
+       echo "WARNING: Files for the experiment already exist"
+    else
+       echo "All the files will be created and a new tar file archived"
+       ECMISS_MOD=1 # This is 1 because the whole tar archive will be created and archived
+    fi
+    cd ..
+    ECMISS_REF=0 # This is 0 in case the tar file exists in ECFS
+    TARDIR=${DIAG}_ref.${JOB_ID}
+    \rm -rf ${TARDIR}
+    mkdir ${TARDIR}
+    cd ${TARDIR}
+    ROOTREF1=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+    ecp -o ec:${ECDISK}/data/refe/trd/${ROOTREF1}.tar . || echo "${ROOTREF1}.tar is missing in ECFS"
+    if [[ -s ${ROOTREF1}.tar ]] ; then
+       tar xvf ${ROOTREF1}.tar
+       \rm -f ${ROOTREF1}.tar
+       echo "WARNING: Files for the reference already exist"
+    else
+       echo "All the files will be created and a new tar file archived"
+       ECMISS_REF=1 # This is 1 because the whole tar archive will be created and archived
+    fi
+    cd ..
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ANO_PAR ]] ; do
+          PAR=${ANO_PAR[$iz]}
+          LEV=${ANO_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+# loop over lead time periods
+#
+          ip=0
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YYS -ge $YYE ]] ; then
+                ip=$((TOT_ALL_DIA+1))
+                echo "Skip precip"
+             fi
+          fi
+          while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                IAFCM=${ALL_IAFCM[$ip]}
+                IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostic tar files
+#
+                id=0
+                EXEC=0
+                NDAT=1 # NDAT will take the value 2 if some reference files are also necessary
+                for DIAP in ${DIAP_LIST[*]} ; do
+#
+# Check if all the ouput files exist
+#
+                    TARDIR=${DIAG}_mod.${JOB_ID}
+                    ROOT2=${DIAP}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                    if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                       echo "${FILE}.grb exists"
+                    else
+                       EXEC=1
+                    fi
+                    TARDIR=${DIAG}_ref.${JOB_ID}
+                    ROOT2=${DIAP}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                    if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                       echo "${FILE}.grb exists"
+                    else
+                       EXEC=1
+                       NDAT=2
+                    fi
+                    id=$((id+1))
+                done # id loop
+                if [[ $FORCETRD = 1 ]] ; then
+                   EXEC=1
+                   NDAT=2
+                fi
+#
+# Compute trends if necessary
+#
+cat > trd_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  ndat=${NDAT},
+ /
+EOF
+                if [[ $EXEC -eq 1 ]] ; then
+                   ECMISS_MOD=1 # The new tar file will have to be archived in ECFS
+                   cat trd_gen_$ie > trd_$ie
+                   ./cal_trd.x < trd_$ie
+#
+# Collect results
+#
+                   id=0
+                   for DIAP in ${DIAP_LIST[*]} ; do
+                       TARDIR=${DIAG}_mod.${JOB_ID}
+                       ROOT1=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       ROOT2=${DIAP}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       if [[ -s ${FILE}.grb ]] ; then
+                          mv ${FILE}.grb ${TARDIR}/.
+                       else
+                          echo "There is a problem; ${FILE}.grb is supposed to exist"
+                          exit
+                       fi
+                       if [[ $NDAT = 2 ]] ; then
+                          TARDIR=${DIAG}_ref.${JOB_ID}
+                          ECMISS_REF=1 # The new tar file will have to be archived in ECFS
+                          ROOTREF1=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                          ROOT2=${DIAP}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                          FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                          if [[ -s ${FILE}.grb ]] ; then
+                             mv ${FILE}.grb ${TARDIR}/.
+                          else
+                             echo "There is a problem; ${FILE}.grb is supposed to exist"
+                             exit
+                          fi
+                       fi
+                       id=$((id+1))
+                   done # id loop
+                fi # endif compute for experiment and reference
+                ip=$((ip+1))
+          done # ip endwhile
+          iz=$((iz+1))
+    done # iz endwhile
+#
+# Copy in ECFS if required
+#
+    TARDIR=${DIAG}_mod.${JOB_ID}
+    if [[ $ECMISS_MOD = 1 ]] ; then
+       if [[ $TRD_ECST -eq 1 ]] ; then
+          ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          cd ${TARDIR}
+          tar -b 128 -cvf ../${ROOT}.tar .
+          cd ..
+          emkdir -p ec:${ECDISK_LONG}/trd
+          ecp -o ${ROOT}.tar ec:${ECDISK_LONG}/trd/
+          echmod 770 ec:${ECDISK_LONG}/trd/${ROOT}.tar
+          \rm -f ${ROOT}.tar
+       fi
+    fi
+    \rm -rf ${TARDIR}
+#
+    TARDIR=${DIAG}_ref.${JOB_ID}
+    if [[ $ECMISS_REF = 1 ]] ; then
+       if [[ $TRD_ECST -eq 1 ]] ; then
+          ROOT=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          cd ${TARDIR}
+          tar -b 128 -cvf ../${ROOT}.tar .
+          cd ..
+          emkdir -p ec:${ECDISK}/data/refe/trd
+          ecp -o ${ROOT}.tar ec:${ECDISK}/data/refe/trd/
+          echmod 770 ec:${ECDISK}/data/refe/trd/${ROOT}.tar
+          \rm -f ${ROOT}.tar
+       fi
+    fi # ECSTORE
+    \rm -rf ${TARDIR}
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_trd.sms"
+#
+%include <tail.h>
+#

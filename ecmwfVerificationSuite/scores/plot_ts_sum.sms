@@ -1,0 +1,364 @@
+%manual
+NAME
+
+  plot_ts_sum - Plots summary of the time series
+
+DESCRIPTION
+
+  Plots summaries of the scores for the time series for multi-forecast
+  system predictions for all the start dates and should be dealt with
+  as a summary of the skill.
+  Note that the output of this job is not stored in the tar files.
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_ts_sum.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST COR RSR RPS RPD
+#
+# Get and compile fortran files
+#
+\rm -f plot_ts_sum.x
+cp ${PATHSO}/plot_ts_sum.f .
+cp ${PATHSO}/tools.f .
+cp ${PATHSO}/tools_plot.f .
+use magics
+pgf90 $COMPOP1 plot_ts_sum.f tools.f tools_plot.f -o plot_ts_sum.x $LINKLI2 $LINKLI1 $LINKLI3
+ls -ltr plot_ts_sum.x
+#
+# create psfile directory in working directory, if not already existent
+#
+for ecdir in psfiles ${SMSGIF}/giffiles ; do
+    if [[ -a $ecdir ]] ; then
+       echo "directory for $ecdir exists already"
+    else
+       mkdir $ecdir
+    fi
+done
+ecdir=psfiles
+#
+# Header for web page
+#
+TS_GIF=1
+if [[ $TS_GIF = 1 ]] ; then
+   if [[ -s ${SMSGIF}/PopBox/scripts/PopBox.js ]] ; then
+      echo "Java script present"
+   else
+      cp -r /home/rd/ney/SkinLayer/sh/PopBox/ ${SMSGIF}
+   fi
+cat>ts_ori_sum.html<<EOF
+<html><head>
+<title>Summary of time series scores</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+   cp ts_ori_sum.html ts_inf_sum.html
+fi
+#
+# Loop over experiments
+# In case of multi-model, plot for every model used
+#
+if [[ $MULTI -eq 1 ]] ; then
+   NUMCHECK=$NUMMOD
+else
+   NUMCHECK=$((NUMMOD-1))
+fi
+EXPM=""
+NENM=""
+TYPM=""
+ie=0
+while [[ $ie -le $NUMCHECK ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      if [[ $ie -lt $NUMMOD ]] ; then
+         export TYPID=${TYP_LIST[$ie]}
+         if [[ $TYPID = 0 ]] ; then
+            export ORIID=${ORI_LIST[$ie]}
+            export CLAID=${CLA_LIST[$ie]}
+            export METID=${MET_LIST[$ie]}
+            export SYSID=${SYS_LIST[$ie]}
+            export STRID=${STR_LIST[$ie]}
+         else
+            export ORIID=off
+            export CLAID=off
+            export METID=off
+            export SYSID=off
+            export STRID=off
+         fi
+         export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+      else
+%include <sms_vars.h>
+%include <def_exp3.h>
+      fi
+      EXPM="${EXPM},'${EXPID_LONG}'"
+      NENM="${NENM},${NENS}"
+      TYPM="${TYPM},${TYPID}"
+      ie=$((ie+1))
+done #ie
+NMOD=$((NUMCHECK+1))
+if [[ $NMOD -lt 15 ]] ; then
+   n=$NMOD
+   while [[ $n -lt 15 ]] ; do
+         EXPM="${EXPM},'none'"
+         NENM="${NENM},999"
+         TYPM="${TYPM},999"
+         n=$((n+1))
+   done
+fi
+EXPM=${EXPM#,}
+NENM=${NENM#,}
+TYPM=${TYPM#,}
+#
+# Diagnostics
+#
+TARDIR="TS.${JOB_ID}"
+\rm -rf ${TARDIR}
+mkdir -p ${TARDIR}
+cp plot_ts_sum.x ${TARDIR}/.
+cd ${TARDIR}
+mkdir ${ecdir}
+#
+# Copy archive with the output of calculations
+#
+ie=0
+while [[ $ie -le $NUMCHECK ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      if [[ $ie -lt $NUMMOD ]] ; then
+         export TYPID=${TYP_LIST[$ie]}
+         if [[ $TYPID = 0 ]] ; then
+            export ORIID=${ORI_LIST[$ie]}
+            export CLAID=${CLA_LIST[$ie]}
+            export METID=${MET_LIST[$ie]}
+            export SYSID=${SYS_LIST[$ie]}
+            export STRID=${STR_LIST[$ie]}
+         else
+            export ORIID=off
+            export CLAID=off
+            export METID=off
+            export SYSID=off
+            export STRID=off
+         fi
+%include <def_exp1.h>
+      else
+%include <sms_vars.h>
+%include <def_exp3.h>
+      fi
+#
+      im=0
+      for MM in ${MM_LIST[*]} ; do
+          DD=${DD_LIST[$im]}
+          TT=${TT_LIST[$im]}
+          ROOT=TS_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          if [[ -s ${ROOT}.tar ]] ; then
+             echo "Results already available"
+          else
+             ecp -o ec:${ECDISK_LONG}/ts/${ROOT}.tar . || echo "${ROOT}.tar missing in ECFS"
+             tar xvf ${ROOT}.tar
+          fi
+          im=$((im+1))
+      done #MM
+      ie=$((ie+1))
+done #ie
+#
+# Construct time series lists
+#
+NAM_LST=""
+PAR_LST=""
+LEV_LST=""
+YYS_LST=""
+YYE_LST=""
+n=0
+for TS in ${TSDIA[*]} ; do
+    set +xv
+    m=0
+    for NAM in ${TS_NAM[*]} ; do
+        if [[ $TS == $NAM ]] ; then
+           echo "Considering the time series $NAM"
+           PAR=${TS_PAR[$m]}
+           LEV=${TS_LVL[$m]}
+        fi
+        m=$((m+1))
+    done
+    m=0
+    for NAM in ${PRO_NAM[*]} ; do
+        if [[ $TS == $NAM ]] ; then
+           echo "Considering the projection index $NAM"
+           PAR=${PRO_PAR[$m]}
+           LEV=${PRO_LEV[$m]}
+        fi
+        m=$((m+1))
+    done
+    set -xv
+    YYS=$YY1
+    YYE=$YY2
+    if [[ $PAR = 228 ]] ; then
+       if [[ $YY1 -lt $YY1_228 ]] ; then
+          YYS=$YY1_228
+       fi
+    fi
+#
+    NAM_LST="${NAM_LST} ${TS}"
+    PAR_LST="${PAR_LST} ${PAR}"
+    LEV_LST="${LEV_LST} ${LEV}"
+    YYS_LST="${YYS_LST} ${YYS}"
+    YYE_LST="${YYE_LST} ${YYE}"
+    n=$((n+1))
+done
+NTS=$n
+set -A NAM_LST $NAM_LST
+set -A PAR_LST $PAR_LST
+set -A LEV_LST $LEV_LST
+set -A YYS_LST $YYS_LST
+set -A YYE_LST $YYE_LST
+#
+namet=""
+par=""
+lev=""
+yy1=""
+yy2=""
+n=0
+while [[ $n -lt $NTS ]] ; do
+      namet="${namet} '${NAM_LST[$n]}',"
+      par="${par} ${PAR_LST[$n]},"
+      lev="${lev} ${LEV_LST[$n]},"
+      yy1="${yy1} ${YYS_LST[$n]},"
+      yy2="${yy2} ${YYE_LST[$n]},"
+      n=$((n+1))
+done
+if [[ $NTS -gt 0 ]] ; then
+   while [[ $n -lt 80 ]] ; do
+         namet="${namet} 'NONE',"
+         par="${par} 999,"
+         lev="${lev} 999,"
+         yy1="${yy1} 999,"
+         yy2="${yy2} 999,"
+         n=$((n+1))
+   done
+   for DIAG in ${DIAG_LIST[*]} ; do
+#
+# Plot the time series
+#
+cat > plots_gen << EOF
+ &control
+  nenm=${NENM},
+  nsdt=${NUMSEA},
+  imm=${MMlist},
+  idd=${DDlist},
+  itt=${TTlist},
+  cros=${CROS},
+  anin=${ANIN},
+  nldt=${NLDT},
+  nf1=${SDlist},
+  nf2=${EDlist},
+  expm=${EXPM},
+  typm=${TYPM},
+  nmod=${NMOD},
+  mult=${MULTI},
+  dia='${DIAG}',
+  nts=${NTS},
+ /
+EOF
+cat > plots_rcal << EOF
+ &timeseries
+  namet=${namet}
+  par=${par}
+  lev=${lev}
+  yy1=${yy1}
+  yy2=${yy2}
+ /
+EOF
+       cat plots_gen plots_rcal > plo_ts_sum
+       ./plot_ts_sum.x < plo_ts_sum
+#
+# Collect results
+#
+       n=0
+       while [[ $n -lt $NTS ]] ; do
+             NAM=${NAM_LST[$n]}
+             PAR=${PAR_LST[$n]}
+             LEV=${LEV_LST[$n]}
+             YYS=${YYS_LST[$n]}
+             YYE=${YYE_LST[$n]}
+             ROOT=${DIAG}_${YYS}-${YYE}_CV${CROS}_I${ANIN}_${PAR}_${LEV}_${NAM}
+             if [[ -s ${ecdir}/${ROOT}.ps ]] ; then
+                echo "File ${ecdir}/${ROOT}.ps correctly created"
+                for PAGE in 1 2 ; do
+                    FILE=${ROOT}_sum_${PAGE}
+                    psselect -p${PAGE} ${ecdir}/${ROOT}.ps ${ecdir}/${FILE}.ps
+                    if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                       cp ${ecdir}/${FILE}.ps ${SMSWORK}/${ecdir}/.
+                       convert -rotate 90 ${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>toto<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+</div>
+EOF
+                       if [[ $PAGE = 1 ]] ; then
+                          cat toto >> ../ts_ori_sum.html
+                       fi
+                       if [[ $PAGE = 2 ]] ; then
+                          cat toto >> ../ts_inf_sum.html
+                       fi
+                    fi
+                done #PAGE loop
+             else
+                echo "File ${ecdir}/${ROOT}.ps should have been created"
+                exit
+             fi
+             n=$((n+1))
+       done #NAM loop
+   done #DIAG loop
+else
+   echo "No time series selected"
+fi
+#
+cd ..
+\rm -rf ${TARDIR}
+\rm -f BRV*tar
+#
+cat>>ts_ori_sum.html<<EOF
+</br>
+</body>
+</html>
+EOF
+cat>>ts_inf_sum.html<<EOF
+</br>
+</body>
+</html>
+EOF
+mv ts_ori_sum.html ${SMSGIF}/
+mv ts_inf_sum.html ${SMSGIF}/
+#
+date
+echo "end of plot_ts_sum.sms"
+#
+%include <tail.h>
+#

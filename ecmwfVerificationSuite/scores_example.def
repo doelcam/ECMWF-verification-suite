@@ -1,0 +1,423 @@
+#
+# Definition of the scores suite
+#  incl changes to gribAPI
+#  uses ne4 scripts (based on nep scripts)
+#  modified to run on he new linux cluster
+#
+# Note that variables in quotes in the experiment definition are lists of values
+#
+
+setenv -i HOME
+setenv -i USER
+setenv -i SCRATCH
+
+set SUITE_NAME scores_example       		# This is the name of the suite displayed
+							# in CDP - make sure you change it for new suites!
+							
+set VSUITE_LOC "/home/ms/gb/ukdm/sms/verificationSuite"   # User-specific location, set it for you.
+
+
+
+
+suite $SUITE_NAME
+
+    edit CPUTIME 6400
+    edit MEM 1500
+    edit NPES 1
+
+    edit WSHOST     ecgb                    # to redirect the relevant jobs to the linux cluster
+    edit QUEUE      long                    # the queue in the working machine
+    edit USER       $USER                   # because smssubmit.x needs it ...
+
+    edit SMSFILES   "${VSUITE_LOC}/scores"
+    edit SMSINCLUDE "${VSUITE_LOC}/scores/include"
+    edit SMSHOME    "${SCRATCH}/sms"
+    edit SMSOUT     "${SCRATCH}/waitqueue/sms/verify/"
+    edit LOGDIR     "${SCRATCH}/waitqueue/sms/verify"
+    edit SMSWORK    "${SCRATCH}/$SUITE_NAME/work"
+    edit SMSGIF     "${SCRATCH}/waitqueue/sms/verify/$SUITE_NAME"
+    edit SMSCMD     "sms_submit %USER% %WSHOST% %SMSJOB% %SMSJOBOUT%"
+    edit SMSKILL    "/home/rd/rdx/bin/smskill %USER% %WSHOST% %SMSRID%"
+
+    edit SMSTRIES   1
+    edit DISP       tarchia      # Display where IDL runs
+
+
+#
+# --- USER DEFINED VARIABLES
+#
+#----------------------------------------------------------------------------------------
+# Experiment definition
+# In case of multi-model ensemble, describe all the experiments used to construct it
+#
+    edit MULTI         1
+    edit MULTI         0
+                                                    # MULTI is 1 if you want to construct a multi-model,
+                                                    # 0 otherwise
+    set EXPLST         "0" 
+                                                    # EXPLST is necessary to create separate jobs inside the 
+                                                    # families. Write as many as individual forecast systems
+    edit EXPVER        "0001"
+                                                    # Experiment identifiers
+                                                    # For multi-model make a list with multi-model name last
+                                                    # The file ? contains the description of the experiments
+                                                    # used to construct the multi-model
+    edit TYPFOR        "0"
+                                                    # Type of experiment.
+                                                    # Use 0 for single model and 1 for multi-forecast system.
+                                                    # It skips the retrieval of monthly means for
+                                                    # multi-forecast system experiments.
+                                                    # The value 1 can also be used to skip the monthly-mean
+                                                    # retrieval and computation of biases and climatologies
+                                                    # for single-model experiments.
+                                                    # When MULTI=1 the last value will always be considered as 1.
+    edit CLASS         "od "
+                                                    # class
+                                                    # If you construct a multi-model, only the EXPVER is
+                                                    # required and no CLASS, STREAM, METHOD, SYSTEM, ORIGIN
+                                                    # or NENS should be specified; otherwise use "off"
+    edit STREAM        "msmm" 
+                                                    # stream
+    edit METHOD        "1 " 
+                                                    # method
+    edit SYSTEM        "4 "  
+                                                    # system
+    edit ORIGIN        "ecmf" 
+                                                    # origin
+    edit NENS          "51 " 
+                                                    # ensemble size
+    edit FCLENMON      4 
+                                                    # length of the experiment in months
+                                                    # for multi-model, common length to all the experiments
+
+#----------------------------------------------------------------------------------------
+# Dates
+#
+    edit START_YEAR    1981	# First year of the integration
+    edit END_YEAR      1984     # Last year of the integration
+
+    edit START_MONTH   "05"  # List of months at which the integrations start for every year
+    edit START_DAY     "01"  # List of days at which integration starts
+    edit START_TIME    "00"  # List of times at which integration 
+#
+# Computation of the anomalies
+#
+    edit ANIN          0             # 1 if anomalies need corrected variance; 0 otherwise
+    edit CROS          1             # Number of years to take out in cross-validation (always odd number)
+
+#----------------------------------------------------------------------------------------
+# Variables
+#
+    edit PLST	 	   "167"
+                        	# List of variables to analyze
+
+    edit TLST		   "128"
+                                # Table version 2, the default is 128 (n.b. precip is 172)
+
+    edit FLST		   "0" 
+                                # Forces the use (1) or not of the table 2 version number (precip 1, 0 otherwise)
+    edit LLST		   "000"
+                                # Vertical levels of the variables to analyze
+    edit MLST		   "6"
+                                # Type of monthly mean: F for flux, t (eg 6) for use of t-hourly data
+                              
+    # Precip reference dataset
+    edit SET_228       gpcp     # Use GPCP by default. Other options are pe4o, cru (ERA40, CRU TS-2.0)
+    edit YY1_228       1980	# Special start year for precip (used when the precip dataset
+	                         # is shorter than for other variables, n.b. this is not active for GPCP)
+
+#----------------------------------------------------------------------------------------
+# Parameters for diagnostics
+#
+   edit SDIA 	      "1 2"
+                                # List of months at which the diagnostics should start
+   edit EDIA          "1 4" 
+                                # List of months at which the diagnostics should end
+
+#----------------------------------------------------------------------------------------
+# Regions available (see description in config.h)
+# GLOB NHEX TROP SHEX GLOL NHEL TROL SHEL GLOO NHEO TROO SHEO
+# EURO NAME IND1 IND2 TRAT NI03 NI04 NI12 NI34
+# AUSG AMZG SSAG CAMG WNAG CNAG ENAG ALAG GRLG MEDG NEUG WAFG EAFG
+# SAFG SAHG SEAG EASG SASG CASG TIBG NASG
+#
+
+    edit RDIA          "TROP" # modify for the desired regions
+
+    edit ECDISK        "verify"
+                                     # Filesystem in ECFS where the data files are stored
+                                     # The final path will be
+                                     # ${ECDISK}/data/${ORIGIN}/${CLASS}/${EXPVER}/s${SYSTEM}/m${METHOD}
+    edit ECSTORE       1             # 1 if storage in ECFS of the output and postscript files is required
+#
+#----------------------------------------------------------------------------------------
+# Jobs to run and specific parameters
+#
+# Bias
+#
+    set BIAS           1             # activates the option of dealing (1) or not (0) with biases and climatologies
+    edit FORCEBIAS     1             # forces (1) or not (0) the calculation of biases and climatologies even if they already exist
+    set PLBIAS         0             # plots (1) or not (0) biases and climatologies
+    edit BIAS_ECST     1             # 1 if storage in ECFS of the output and postscript files is required
+    edit BIAS_GIF      0             # 1 if to produce the html files with maps
+#
+# Computation of the anomalies
+#
+    edit FORCEANRE     1             # forces (1) or not (0) the calculation of the anomalies for the reference
+    edit FORCEANMO     1             # forces (1) or not (0) the calculation of the anomalies for the experiments
+                                     # note that 1 requires the MM files for single-model experiments
+#
+# Computation of climatological PDF and percentiles (no plotting)
+#
+    set PDFC           0             # activates the option of computing (1) or not (0) the climatological distribution
+    edit FORCEPDFC     0             # forces (1) or not (0) the calculation of climatological distributions
+    edit PDF_TYP       ful           # use ful or ano to compute the distributions with full fields or anomalies
+    edit PDF_PER       1             # method to estimate the thresholds: counting (0) or kernel-based method (1)
+    edit PDF_SIG       0.40          # value of sigma in the kernel for the PDF
+    edit PDF_ECST      0             # 1 if storage in ECFS of the output is required
+#
+# Computation of trends
+#
+    set TRD            0             # activates the option of computing (1) or not (0) the trends
+    edit FORCETRD      0             # forces (1) or not (0) the calculation of trends
+    edit TRD_ECST      1             # 1 if storage in ECFS of the output is required
+#
+# Ensemble-mean scores
+#
+    set ACSP           1             # computes and plots (1) or not (0) ACC, ACP and spread
+    edit FORCEACC      1             # forces (1) or not (0) the calculation of the ensemble-mean diagnostics
+    set ACCMAP         1             # computes and plots (1) or not (0) maps of the scores
+    edit ACCMAP        $ACCMAP
+    edit ACC_BOOT      1             # computes (1) or not (0) bootstrap uncertainty estimates for the deterministic scores
+    edit ACC_NSAM      1000            # sample size of the bootstrap (only active if ACC_BOOT eq 1)
+    edit ACC_TOPTH     97.5          # top percentile of the confidence interval estimated with the bootstrap
+    edit ACC_BOTTH     2.5           # bottom percentile of the confidence interval estimated with the bootstrap
+    edit ACSP_ECST     1             # 1 if storage in ECFS of the output and postscript files is required
+    edit ACSP_GIF      0             # 1 if to produce the html files with maps
+#
+# Time series
+#
+    set TS             0             # computes and plots (1) the time series
+    edit FORCETS       0             # forces (1) or not (0) the calculation of the time series
+# Time series available (description available in config.h)
+# USHEAR VSHEAR RRAIND RRCTPA RRINDO RRSAHE RRGUIC RREAFR RRSAFR T2SAHE T2EAFR T2SAFR
+# RRNAME T2NAME RREURO RRNEUR RRSEUR T2EURO T2NEUR T2SEUR T2UKRA
+# RRCENA RRNWNA RRNENA RRGCNA T2CENA T2NWNA T2NENA T2GCNA T2FLOR
+# RRCAAM RRNEBR RRATSA RRPASA T2CAAM T2NEBR T2ATSA T2PASA
+# RRCASI RRJAKO RRCHIN RRMEAS RRSEAS RRPHIL T2CASI T2JAKO T2CHIN T2MEAS
+# RRAUST RRNEAU RRSEAU T2AUST T2NEAU T2SEAU
+# STNIN3 STNIN4 STNI12 STNI34 STTATL STIODI STATL3 STTAMM SLPSOI
+# CAAMAZ CANILE CAZAMB CAJIAN CAGANG
+# T2GAVE T2GALP T2GAOP
+    edit TSDIA         "STNIN3 STNIN4 STNI34"
+    edit TSDIA         "Z5PNAP Z5NAOP SLAONP SLPSOI"
+    edit TSDIA         "T2GAVE"
+    edit TSDIA         "Z5PNAP"
+
+    edit TS_GIF        0             # 1 if to produce the html files with plots
+    edit TS_ECST       1             # 1 if storage in ECFS of the output and postscript files is required
+#
+# Probability scores
+#
+    set BRV            1             # computes and plots (1) or not (0) REL, ROC and value
+    edit FORCEBRV      1             # forces (1) or not (0) the calculation of trends
+    set BRVMAP         1             # computes and plots (1) or not (0) maps of the scores
+    edit BRVMAP        $BRVMAP
+    edit BRV_EVT       "33 67"
+                                     # percentile thresholds to define binary events (e.g. 33, 67 correspond to lower and upper tercile)
+    edit BRV_PERM      1             # method to estimate the thresholds: counting (0) or kernel-based method (1)
+    edit BRV_IPRB      0             # switch to determine the number of probability bins
+                                     # it takes NENS+1 (1) or a specific number of bins (if not 1)
+    edit BRV_NPRO      10            # number of probability bins (it will be NENS+1 if BRV_IPRB eq 1)
+    edit BRV_BOOT      1             # computes (1) or not (0) bootstrap uncertainty estimates for the probability scores
+    edit BRV_NSAM      1000          # sample size of the bootstrap (only active if BRV_BOOT eq 1)
+    edit BRV_TOPTH     97.5          # top percentile of the confidence interval estimated with the bootstrap
+    edit BRV_BOTTH     2.5           # bottom percentile of the confidence interval estimated with the bootstrap
+    edit BRV_ECST      1             # 1 if storage in ECFS of the output and postscript files is required
+    edit BRV_GIF       0             # 1 if to produce the html files with maps, ROC and reliability diagrams
+
+
+
+
+#
+#----------------------------------------------------------------------------------------
+# Beginning of the suite (for normal use of the suite not necessary to modify anything below here)
+#
+# 
+# --- This family is just to delay the start (so that you can switch off some tasks)
+#
+    family definitions
+      task def
+    endfamily
+#
+# --- Data retrieval
+#
+    family retrieval
+      trigger definitions == complete
+      task getmonthly
+    endfamily
+    set trig "retrieval == complete"
+#
+# --- Climatology, bias and diagnostics
+#
+    if (BIAS eq 1) then
+       family climate
+         trigger retrieval == complete
+         task cal_bias
+      #   task plot_bias
+      #   if (PLBIAS eq 1) then
+      #      trigger cal_bias == complete
+      #   else
+      #      defstatus complete
+      #   endif
+       endfamily
+       set trig "$trig and climate == complete"
+    endif
+#
+# --- Anomalies
+#
+    family anom
+      trigger $trig
+      task cal_anom
+    endfamily
+    set trig "$trig and anom == complete"
+#
+# --- Climatological distributions
+#
+    if (PDFC eq 1) then
+       family pdfc
+         trigger $trig
+         loop num ( $EXPLST ) do
+            family pdfc_$num
+              edit NUM $num
+              task cal_pdfcli
+            endfamily
+         endloop
+       endfamily
+       set trig "$trig and pdfc == complete"
+    endif
+#
+# --- Trends
+#
+    if (TRD eq 1) then
+       family trd
+         trigger $trig
+         loop num ( $EXPLST ) do
+            family trd_$num
+              edit NUM $num
+              task cal_trd
+           #   task plot_trd ; trigger cal_trd == complete
+            endfamily
+         endloop
+       endfamily
+       set trig "$trig and trd == complete"
+    endif
+#
+# --- Deterministic
+#
+    if (ACSP eq 1) then
+       family determ
+         trigger $trig
+         loop num ( $EXPLST ) do
+            family determ_$num
+#             echo $num
+              edit NUM $num
+              task cal_acc_reg
+              task cal_acc_map
+              if (ACCMAP eq 1) then
+                 trigger cal_acc_reg == complete
+              else
+                 defstatus complete
+              endif
+              
+	   #   task plot_acc_map
+           #   
+	   #   
+	   #   if (ACCMAP eq 1) then
+           #      trigger cal_acc_map == complete
+           #   else
+           #      defstatus complete
+           #   endif
+            endfamily
+            if (num eq 0) then
+               set trig_plo "determ_$num == complete"
+            else
+               set trig_plo "$trig_plo and determ_$num == complete"
+            endif
+         endloop
+       #  task plot_acc_bar ;      trigger $trig_plo
+       #  task plot_acc_sum ;      trigger plot_acc_bar == complete
+       endfamily
+       set trig "$trig and determ == complete"
+    endif
+#
+# --- Time series
+#
+    if (TS eq 1) then
+       family ts
+         trigger $trig
+         loop num ( $EXPLST ) do
+            family ts_$num
+              edit NUM $num
+              if (num eq 0) then
+                 task cal_ts
+              else
+                 set prev `expr $num - 1`
+                 task cal_ts ; trigger ../ts_$prev/cal_ts == complete
+              endif
+              task cal_proj ; trigger cal_ts == complete
+      #        task plot_ts ; trigger cal_proj == complete and cal_ts == complete
+            endfamily
+            if (num eq 0) then
+               set trig_plo "ts_$num == complete"
+            else
+               set trig_plo "$trig_plo and ts_$num == complete"
+            endif
+         endloop
+    #     task plot_ts_sum ; trigger $trig_plo
+       endfamily
+       set trig "$trig and ts == complete"
+    endif
+#
+# --- Probabilistic
+#
+    if (BRV eq 1) then
+       family prob
+         trigger $trig
+         loop num ( $EXPLST ) do
+            family prob_$num
+              edit NUM $num
+              task cal_rel_reg
+              task cal_rel_map
+              if (BRVMAP eq 1) then
+                 trigger cal_rel_reg == complete
+              else
+                 defstatus complete
+              endif
+     #         task plot_rel ; trigger cal_rel_reg == complete and cal_rel_map == complete
+            endfamily
+            if (num eq 0) then
+               set trig_plo "prob_$num == complete"
+            else
+               set trig_plo "$trig_plo and prob_$num == complete"
+            endif
+         endloop
+     #    task plot_rel_bar ; trigger $trig_plo
+     #    task plot_rel_sum ; trigger plot_rel_bar == complete
+       endfamily
+       set trig "$trig and prob == complete"
+    endif
+#
+# --- Clean directories
+#
+#   task clean ; trigger $trig
+    task clean ; defstatus suspended
+#
+# --- Webplots
+#
+#   family webplots
+#     trigger diagnostics == complete
+#     task webplots
+#   endfamily
+
+endsuite

@@ -1,0 +1,352 @@
+%manual
+NAME
+
+  plot_bias - Plots the bias and climatologies
+
+DESCRIPTION
+
+  Plots the climatology and the bias of the experiment
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_bias.sms"
+date
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+%include <plotenv.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+# Compile get_grib.f (depending on architecture?)
+#
+cp ${PATHSO_IDL}/get_grib.f .
+\rm -f get_grib.x
+pgf90 $COMPOP2 get_grib.f -o get_grib.x $LINKLI1
+ls -l get_grib.x
+#
+# Create gif directory, if not already existent
+#
+for ecdir in ${SMSGIF}/giffiles ; do
+    if [[ -a $ecdir ]] ; then
+       echo "directory for $ecdir exists already"
+    else
+       mkdir $ecdir
+    fi
+done
+#
+ecdir=psfiles
+#
+# Loop over experiments
+# In case of multi-model, plot for every model used
+# The experiment NUMMOD corresponds to the reference
+#
+CONT_MOD=0 # Only make the plots for the reference if some plots have been done for an experiment (CONT_MOD=1)
+ie=0
+while [[ $ie -le $NUMMOD ]] ; do
+      if [[ $ie -eq $NUMMOD ]] ; then
+         set -A DIAG_LIST CLIM STDV
+         export EXPID_LONG=refe
+         export ECDISK_LONG="${ECDISK}/data/refe"
+         if [[ $CONT_MOD = 1 ]] ; then
+            CONT=1
+         fi
+      else
+         set -A DIAG_LIST BIAS SDRT CLIM STDV
+         export EXPID=${EXP_LIST[$ie]}
+         export TYPID=${TYP_LIST[$ie]}
+         export ORIID=${ORI_LIST[$ie]}
+         export CLAID=${CLA_LIST[$ie]}
+         export METID=${MET_LIST[$ie]}
+         export SYSID=${SYS_LIST[$ie]}
+         export STRID=${STR_LIST[$ie]}
+         export NENS=${NEN_LIST[$ie]}
+         CONT=0
+         if [[ $TYPID = 0 ]] ; then
+%include <def_exp1.h>
+            CONT=1
+         fi
+         if [[ $CONT = 1 ]] ; then
+            CONT_MOD=1
+         fi
+      fi
+      if [[ $TYPID = 1 ]] ; then
+         CONT=0
+         CONT_MOD=0
+      fi
+#
+      if [[ $CONT = 1 ]] ; then
+#
+# Header for web page
+#
+         if [[ $BIAS_GIF = 1 ]] ; then
+            if [[ -s ${SMSGIF}/PopBox/scripts/PopBox.js ]] ; then
+               echo "Java script present"
+            else
+               cp -r /home/rd/ney/SkinLayer/sh/PopBox/ ${SMSGIF}/.
+            fi
+cat>clim_map_$ie.html<<EOF
+<html><head>
+<title>Summary of climatology and bias maps for experiment ${EXPID_LONG}</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+         fi
+#
+# Check if the specific tar file already exists
+#
+         im=0
+#
+# Loop over months
+#
+         for MM in ${MM_LIST[*]} ; do
+             DD=${DD_LIST[$im]}
+             TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+             id=0
+             for DIAG in ${DIAG_LIST[*]} ; do
+                 TARDIR=${DIAG}.${JOB_ID}
+                 \rm -rf ${TARDIR}
+                 mkdir ${TARDIR}
+                 mkdir ${TARDIR}/${ecdir}
+                 cd ${TARDIR}
+                 ECMISS[$id]=0 # This is 0 in case the tar file exists in ECFS
+                 ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                 ecp -o ec:${ECDISK_LONG}/${ecdir}/${ROOT}_ps.tar . || echo "${ROOT}_ps.tar missing in ECFS"
+                 if [[ -s ${ROOT}_ps.tar ]] ; then
+                    tar xvf ${ROOT}_ps.tar
+                    \rm -f ${ROOT}_ps.tar
+                 else
+                    echo "All the files will be created and a new tar file archived"
+                    ECMISS[$id]=1
+                 fi
+#
+# Get IDL scripts
+#
+                 cp ${PATHSO_IDL}/LSM_scwc_25x25 .
+                 cp ${PATHSO_IDL}/pl_map.col .
+                 cp ${PATHSO_IDL}/loadcol.pro .
+                 cp ${PATHSO_IDL}/col_bar_no.pro .
+                 cp ${PATHSO_IDL}/get_grib.pro .
+                 cp ${PATHSO_IDL}/get_grib.job .
+                 chmod u+x get_grib.job
+                 cp ${PATHSO_IDL}/pl_map.pro .
+                 cp ${PATHSO_IDL}/pl_def.pro .
+                 cp ${PATHSO_IDL}/pl_read.pro .
+                 cp ${PATHSO_IDL}/pl_cont.pro .
+                 cp ${PATHSO_IDL}/pl_mask.pro .
+                 cp ${PATHSO_IDL}/pl_colbar.pro .
+                 cp ${PATHSO_IDL}/pl_header.pro .
+#
+                 cp ../get_grib.x .
+#
+                 cd ..
+                 id=$((id+1))
+             done #DIAG
+#
+# Loop over fields
+#
+             iz=0
+             while [[ $iz -le $TOT_ALL_PAR ]] ; do
+                   PAR=${ALL_PAR[$iz]}
+                   LEV=${ALL_LEV[$iz]}
+                   YYS=$YY1
+                   YYE=$YY2
+                   if [[ $PAR = 228 ]] ; then
+                      if [[ $YY1 -lt $YY1_228 ]] ; then
+                         YYS=$YY1_228
+                      fi
+                   fi
+#
+# Loop over lead time periods
+#
+                   ip=0
+                   while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                         IAFCM=${ALL_IAFCM[$ip]}
+                         IEFCM=${ALL_IEFCM[$ip]}
+#
+# Produce pl_exdef file
+#
+                         id=0
+                         for DIAG in ${DIAG_LIST[*]} ; do
+                             TARDIR=${DIAG}.${JOB_ID}
+                             cd ${TARDIR}
+#
+                             PLHILO=1
+                             if [[ $DIAG = 'BIAS' || $DIAG = 'SDRT' ]] ; then
+                                PLHILO=0
+                             fi
+                             PLSUB=0
+                             BOXSETFLAG=0
+                             if [[ $PAR = 228 ]]; then 
+                                BOXSETFLAG=1
+                             fi
+                             LSMSETFLAG=0
+#
+cat > pl_exdef_map.pro << EOF
+ PRO pl_exdef_map, logunit, debug
+ if debug eq 1 then printf, logunit, '---> entering pl_exdef'
+ common com_pldef
+ pldat      = 1
+ plsub      = $PLSUB
+ boxsetflag = $BOXSETFLAG
+ lsmsetflag = $LSMSETFLAG
+ plvar      = ${PAR}
+ pllev      = ${LEV}
+ iafcm      = ${IAFCM}
+ iefcm      = ${IEFCM}
+ nens       = ${NENS}
+ yy1        = ${YYS}
+ yy2        = ${YYE}
+ mm         = ${MM}
+ dd         = ${DD}
+ tt         = ${TT}
+ expver     = '${EXPID_LONG}'
+ dat_type   = '${DIAG}'
+ plhilo     = ${PLHILO}
+ if debug eq 1 then printf, logunit, '---> leaving pl_exdef'
+ return
+ end
+EOF
+#
+# call idl
+#
+cat > INPUT_bias << EOF
+ pl_map, debug=${DEBUG}
+ exit
+EOF
+                             ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                             FILE=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                             plot=0
+                             if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                echo "The file ${FILE}.ps already exists"
+                                if [[ $FORCEBIAS = 1 ]] ; then
+                                   echo "But the file will be created anyway"
+                                   plot=1
+                                fi
+                             else
+                                echo "The file ${FILE}.ps will be created"
+                                plot=1
+                             fi
+                             if [[ $plot -eq 1 ]] ; then
+#
+# Copy archive with the output of calculations
+#
+                                if [[ -s ${ROOT}.tar ]] ; then
+                                   echo "Results already available"
+                                else
+                                   ecp -o ec:${ECDISK_LONG}/clim/${ROOT}.tar . || echo "${ROOT}.tar missing in ECFS"
+                                   tar xvf ${ROOT}.tar
+                                fi
+#
+                                echo "start idl"
+                                if [[ $DEBUG = 1 ]] ;then
+                                   echo "call idl with queue"
+                                   idl -queue < INPUT_bias
+                                else
+                                   echo "call idl without queue"
+                                   idl < INPUT_bias
+                                fi
+                                echo "end idl"
+                                ECMISS[$id]=1 # The new tar file will have to be archived in ECFS
+#
+# Collect results in the tar file if a new plot has been produced
+#
+                                if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                   echo "${ecdir}/${FILE}.ps has been correctly created"
+                                else
+                                   echo "The file ${ecdir}/${FILE}.ps is missing"
+                                   exit
+                                fi
+                             fi
+#
+# Create gif file
+#
+                             if [[ $BIAS_GIF = 1 ]] ; then
+                                if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                   convert -rotate 270 ${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>../clim_map_$ie.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+</div>
+EOF
+                                else
+                                   echo "File missing"
+                                   exit
+                                fi
+                             fi
+#
+                             cd ..
+                             id=$((id+1))
+                         done #id (diagnostics)
+                         ip=$((ip+1))
+                   done #ip (lead time periods)
+                   iz=$((iz+1))
+             done #iz
+#
+# Copy in ECFS if required; only do it if BIAS_ECST is 1 and either the tar file was 
+# previously missing or a new postscript file has been created
+#
+             id=0
+             for DIAG in ${DIAG_LIST[*]} ; do
+                 TARDIR=${DIAG}.${JOB_ID}
+                 ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                 if [[ $BIAS_ECST -eq 1 ]] ; then
+                    if [[ ${ECMISS[$id]} -eq 1 ]] ; then
+                       cd ${TARDIR}
+                       tar -b 128 -cvf ${ROOT}_ps.tar ${ecdir}/.
+                       emkdir -p ec:${ECDISK_LONG}/${ecdir}
+                       ecp -o ${ROOT}_ps.tar ec:${ECDISK_LONG}/${ecdir}/
+                       echmod 770 ec:${ECDISK_LONG}/${ecdir}/${ROOT}_ps.tar
+                       \rm -f ${ROOT}_ps.tar
+                       cd ..
+                    fi
+                 fi
+                 rm -rf ${TARDIR}
+                 id=$((id+1))
+             done #DIAG
+             im=$((im+1))
+         done #im
+#
+         if [[ $BIAS_GIF = 1 ]] ; then
+cat>>clim_map_$ie.html<<EOF
+</br>
+</body>
+</html>
+EOF
+            mv clim_map_$ie.html ${SMSGIF}/.
+         fi
+#
+      fi #CONT eq 1
+      ie=$((ie+1))
+done #ie
+#
+date
+echo "end of plot_bias.sms"
+#
+%include <tail.h>

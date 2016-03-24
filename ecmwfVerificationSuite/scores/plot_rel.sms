@@ -1,0 +1,577 @@
+%manual
+NAME
+
+  plot_rel - Plots probabilistic scores for dichotomous events
+
+DESCRIPTION
+
+  Plots the grid-point and area-averaged reliability, resolution, Brier score,
+  ROC and value
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_rel.sms"
+date
+#
+%include <sms_vars.h>
+if [[ ! -d $SMSWORK ]] ; then
+   mkdir -p $SMSWORK
+fi
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+
+export MAGPLUS_VERSION=new
+use magics++
+
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+typeset -Z2 PEVT NPRO
+typeset -Z5 NSAM
+NSAM=$BRV_NSAM
+PLOT_SIG=0 # Switch to plot all significant values (0), only positive (1) or only negative (-1) for BSS, BSI and ROCSS
+#
+set -A DIAR_LIST BRV ROC
+set -A DIAP_LIST BSS BSI REL RES SHA ROC
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Create gif directory, if not already existent
+#
+for ecdir in ${SMSGIF}/giffiles ; do
+    if [[ -a $ecdir ]] ; then
+       echo "directory for $ecdir exists already"
+    else
+       mkdir $ecdir
+    fi
+done
+#
+# Header for web page
+#
+if [[ $BRV_GIF = 1 ]] ; then
+   if [[ -s ${SMSGIF}/PopBox/scripts/PopBox.js ]] ; then
+      echo "Java script present"
+   else
+      cp -r /home/rd/ney/SkinLayer/sh/PopBox/ ${SMSGIF}/.
+   fi
+cat>rel_map_$ie.html<<EOF
+<html><head>
+<title>Summary of probabilistic maps for experiment $ie</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+cat>rel_reg_$ie.html<<EOF
+<html><head>
+<title>Summary of probabilistic scores for experiment $ie</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+fi
+#
+ecdir=psfiles
+#
+# Get and compile fortran files
+# uses plot_rel_map_new.f !!
+
+if [[ -a plot_rel_reg.x && -a plot_rel_map.x && -a plot_roc_reg.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/plot_rel_reg.f .
+      cp ${PATHSO}/plot_roc_reg.f .
+      cp ${PATHSO}/plot_rel_map_new.f .
+      cp ${PATHSO}/tools.f .
+      cp ${PATHSO}/tools_plot.f .
+
+
+      pgf90 -g plot_rel_reg.f tools.f tools_plot.f -o plot_rel_reg.x  $LINKLI1 $LINKLI3 $MAGPLUSLIB_SHARED
+      pgf90 -g plot_roc_reg.f tools.f tools_plot.f -o plot_roc_reg.x  $LINKLI1 $LINKLI3 $MAGPLUSLIB_SHARED
+##      pgf90 -g plot_rel_map_new.f tools.f tools_plot.f -o plot_rel_map.x $LINKLI1 $LINKLI3 $MAGPLUSLIB_SHARED
+      pgf90 -g plot_rel_map_new.f tools.f tools_plot.f -o plot_rel_map.x $LINKLI1 $MAGPLUSLIB_SHARED $LINKLI3 
+
+#     pgf90 -tp px -r8 plot_rel_reg.f tools.f tools_plot.f -o plot_rel_reg.x $MAGPLUSLIB_SHARED $LINKLI1 $LINKLI3
+   else
+      echo "Compile by hand"
+   fi
+fi
+#
+DIAG=BRV
+#
+# In case of multi-model, plot for every model used
+#
+export EXPID=${EXP_LIST[$ie]}
+if [[ $ie -lt $NUMMOD ]] ; then
+   export TYPID=${TYP_LIST[$ie]}
+   if [[ $TYPID = 0 ]] ; then
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+   else
+      export ORIID=off
+      export CLAID=off
+      export METID=off
+      export SYSID=off
+      export STRID=off
+   fi
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+if [[ $BRV_IPRB = 0 ]] ; then
+   NPRO=$BRV_NPRO
+else
+   NPRO=$((NENS+1))
+fi
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+    TARDIR="${DIAG}.${JOB_ID}"
+    \rm -rf ${TARDIR}
+    mkdir -p ${TARDIR}
+    cp reglist_std ${TARDIR}/.
+    cp reglist_139 ${TARDIR}/.
+    cp LSM* ${TARDIR}/.
+    cp plot_rel_reg.x ${TARDIR}/.
+    cp plot_rel_map.x ${TARDIR}/.
+    cp plot_roc_reg.x ${TARDIR}/.
+    cd ${TARDIR}
+    ROOT1=${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+#
+# Check if the specific tar file already exists
+#
+    ECMISS=0 # This is 0 in case the tar file exists in ECFS
+    TARFILE=${DIAG}_${ROOT1}
+    ecp -o ec:${ECDISK_LONG}/${ecdir}/${TARFILE}_ps.tar . || echo "${TARFILE}_ps.tar missing in ECFS"
+    if [[ -s ${TARFILE}_ps.tar ]] ; then
+       tar xvf ${TARFILE}_ps.tar
+       \rm -f ${TARFILE}_ps.tar
+       echo "WARNING: Files for the experiment already exist"
+       echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+    else
+       echo "All the files will be created and a new tar file archived"
+       ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+       mkdir ${ecdir}
+    fi
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ALL_PAR ]] ; do
+          PAR=${ALL_PAR[$iz]}
+          LEV=${ALL_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+          ROOT2=${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+#
+# Loop over lead time periods
+#
+          ip=0
+          while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                IAFCM=${ALL_IAFCM[$ip]}
+                IEFCM=${ALL_IEFCM[$ip]}
+#
+# Produce postscript file
+#
+                for PEVT in ${PEVT_LIST[*]} ; do
+                    plot_map=1
+#
+                    for DIAP in ${DIAP_LIST[*]} ; do
+                        FILE=${DIAP}_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+                        if [[ $BRV_BOOT -eq 1 ]] ; then
+                           FILE=${FILE}_S${NSAM}
+                        fi
+                        if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                           echo "The file ${FILE}.ps already exists"
+                        else
+                           echo "The file ${FILE}.ps will be created"
+                           plot_map=2
+                        fi
+                    done #DIAP loop
+                done #PEVT
+                if [[ $FORCEBRV = 1 ]] ; then
+                   plot_map=2
+                fi
+#
+                plot_rel_reg=1
+                plot_roc_reg=1
+                DIA_REL_REG=""
+                DIA_ROC_REG=""
+                for REG in ${ALL_REG[*]} ; do
+                    for DIAR in ${DIAR_LIST[*]} ; do
+                        do_reg=1
+                        for PEVT in ${PEVT_LIST[*]} ; do
+                            FILE=${DIAR}_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                            if [[ $BRV_BOOT -eq 1 ]] ; then
+                               FILE=${FILE}_S${NSAM}
+                            fi
+                            if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                               echo "${FILE}.ps exists"
+                            else
+                               do_reg=2
+                            fi
+                        done #PEVT
+                        if [[ $FORCEBRV = 1 ]] ; then
+                           do_reg=2
+                        fi
+                        if [[ $do_reg == 2 ]] ; then
+                           if [[ $DIAR = BRV ]] ; then
+                              DIA_REL_REG="${DIA_REL_REG} ${REG}"
+                              plot_rel_reg=2
+                           fi
+                           if [[ $DIAR = ROC ]] ; then
+                              DIA_ROC_REG="${DIA_ROC_REG} ${REG}"
+                              plot_roc_reg=2
+                           fi
+                        fi
+                    done #DIAR loop
+                done #REG loop
+                if [[ $BRV_MAP -eq 0 ]] ; then
+                   plot_map=1
+                fi
+#
+                set -A DIA_REL_REG $DIA_REL_REG
+                set -A DIA_ROC_REG $DIA_ROC_REG
+                REL_REG_LST=""
+                ROC_REG_LST=""
+                n=0
+                while [[ $n -lt $TOT_REG ]] ; do
+                      REL_REG_LST="${REL_REG_LST} 0"
+                      ROC_REG_LST="${ROC_REG_LST} 0"
+                      n=$((n+1))
+                done
+                set -A REL_REG_LST $REL_REG_LST
+                set -A ROC_REG_LST $ROC_REG_LST
+                if [[ $plot_rel_reg -eq 2 ]] ; then
+                    for REG in ${DIA_REL_REG[*]} ; do
+                        n=0
+                        while [[ $n -lt $TOT_REG ]] ; do
+                              if [[ ${REG_NAM[$n]} == $REG ]] ; then
+                                 REL_REG_LST[$n]=1
+                              fi
+                              n=$((n+1))
+                        done
+                    done
+                fi
+#
+# Only plot for the regions missing
+#
+                if [[ $plot_roc_reg -eq 2 ]] ; then
+                    for REG in ${DIA_ROC_REG[*]} ; do
+                        n=0
+                        while [[ $n -lt $TOT_REG ]] ; do
+                              if [[ ${REG_NAM[$n]} == $REG ]] ; then
+                                 ROC_REG_LST[$n]=1
+                              fi
+                              n=$((n+1))
+                        done
+                    done
+                fi
+                rcal_rel=""
+                rcal_roc=""
+                n=0
+                while [[ $n -lt $TOT_REG ]] ; do
+                      rcal_rel="${rcal_rel} ${REL_REG_LST[$n]},"
+                      rcal_roc="${rcal_roc} ${ROC_REG_LST[$n]},"
+                      n=$((n+1))
+                done
+cat > prel_regcal_$ie << EOF
+rcal=${rcal_rel}
+ /
+EOF
+cat > proc_regcal_$ie << EOF
+rcal=${rcal_roc}
+ /
+EOF
+#
+cat > plo_rel_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nevt=${BRV_NEVT},
+  pevt=${BRV_PEVT},
+  permeth=${BRV_PERM},
+  boot=${BRV_BOOT},
+  nsam=${BRV_NSAM},
+  iprb=${BRV_IPRB},
+  npro=${BRV_NPRO},
+  topth=${BRV_TOPTH},
+  botth=${BRV_BOTTH},
+EOF
+cat > plo_rel_nre_$ie << EOF
+  nreg=${TOT_REG},
+EOF
+cat > plo_rel_sig_$ie << EOF
+  plsi=${PLOT_SIG},
+EOF
+cat > plo_rel_end << EOF
+ /
+EOF
+                if [[ $plot_map -eq 2 ]] ; then
+#
+# Copy archive with the output of calculations
+#
+                   TARFILE2=BRV_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+                   if [[ -s ${TARFILE2}.tar ]] ; then
+                      echo "Results already available"
+                   else
+                      ecp -o ec:${ECDISK_LONG}/rel/${TARFILE2}.tar . || echo "${TARFILE2}.tar missing in ECFS"
+                      tar xvf ${TARFILE2}.tar
+                   fi
+                   cat plo_rel_gen_$ie plo_rel_sig_$ie plo_rel_end > plo_rel_map_$ie
+#AW                   ./plot_rel_map.x < plo_rel_map_$ie
+                   ECMISS=1 # The new tar file will have to be archived in ECFS
+#
+# Collect results if a new file has been produced
+#
+                   for PEVT in ${PEVT_LIST[*]} ; do
+                       for DIAP in ${DIAP_LIST[*]} ; do
+                           FILE=${DIAP}_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+                           if [[ $BRV_BOOT -eq 1 ]] ; then
+                              FILE=${FILE}_S${NSAM}
+                           fi
+                           if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                              echo "${ecdir}/${FILE}.ps has been correctly created"
+                           else
+                              echo "There is a problem; ${ecdir}/${FILE}.ps is supposed to exist"
+##AW                              exit
+                           fi
+                       done #DIAP loop
+                   done #PEVT
+                fi
+                if [[ $BRV_GIF = 1 ]] ; then
+                   if [[ $BRV_MAP -eq 1 ]] ; then
+                      for PEVT in ${PEVT_LIST[*]} ; do
+                          for DIAP in ${DIAP_LIST[*]} ; do
+                              FILE=${DIAP}_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}
+                              if [[ $BRV_BOOT -eq 1 ]] ; then
+                                 FILE=${FILE}_S${NSAM}
+                              fi
+                              if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                                 convert -rotate 90 ${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>../rel_map_$ie.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+</div>
+EOF
+                              else
+                                 echo "File missing"
+##AW                                 exit
+                              fi
+                          done #DIAP loop
+                      done #PEVT loop
+                   fi
+                fi
+                if [[ $plot_rel_reg -eq 2 ]] ; then
+#
+# Copy file with the output of calculations
+#
+                   TARFILE2=BRV_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+                   if [[ -s ${TARFILE2}.tar ]] ; then
+                      echo "Results already available"
+                   else
+                      ecp -o ec:${ECDISK_LONG}/rel/${TARFILE2}.tar . || echo "${TARFILE2}.tar missing in ECFS"
+                      tar xvf ${TARFILE2}.tar
+                   fi
+                   if [[ $PAR -eq 139 ]] ; then
+                      cat plo_rel_gen_$ie plo_rel_nre_$ie plo_rel_end reglist_139 prel_regcal_$ie > plo_rel_reg_$ie
+                   else
+                      cat plo_rel_gen_$ie plo_rel_nre_$ie plo_rel_end reglist_std prel_regcal_$ie > plo_rel_reg_$ie
+                   fi
+                   cat plo_rel_reg_$ie
+                   ./plot_rel_reg.x < plo_rel_reg_$ie
+                   ECMISS=1 # The new tar file will have to be archived in ECFS
+#
+# Collect results if a new file has been produced
+#
+                   for PEVT in ${PEVT_LIST[*]} ; do
+                       for REG in ${DIA_REL_REG[*]} ; do
+                           FILE=BRV_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                           if [[ $BRV_BOOT -eq 1 ]] ; then
+                              FILE=${FILE}_S${NSAM}
+                           fi
+                           if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                              echo "${ecdir}/${FILE}.ps has been correctly created"
+                           else
+                              echo "There is a problem; ${ecdir}/${FILE}.ps is supposed to exist"
+                              exit
+                           fi
+                       done #REG loop
+                   done #PEVT loop
+                fi
+                if [[ $plot_roc_reg -eq 2 ]] ; then
+#
+# Copy archive with the output of calculations
+#
+                   TARFILE2=BRV_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+                   if [[ -s ${TARFILE2}.tar ]] ; then
+                      echo "Results already available"
+                   else
+                      ecp -o ec:${ECDISK_LONG}/rel/${TARFILE2}.tar . || echo "${TARFILE2}.tar missing in ECFS"
+                      tar xvf ${TARFILE2}.tar
+                   fi
+                   if [[ $PAR -eq 139 ]] ; then
+                      cat plo_rel_gen_$ie plo_rel_nre_$ie plo_rel_end reglist_139 proc_regcal_$ie > plo_roc_reg_$ie
+                   else
+                      cat plo_rel_gen_$ie plo_rel_nre_$ie plo_rel_end reglist_std proc_regcal_$ie > plo_roc_reg_$ie
+                   fi
+                   cat plo_roc_reg_$ie
+                   ./plot_roc_reg.x < plo_roc_reg_$ie
+                   ECMISS=1 # The new tar file will have to be archived in ECFS
+#
+# Collect results if a new file has been produced
+#
+                   for PEVT in ${PEVT_LIST[*]} ; do
+                       for REG in ${DIA_ROC_REG[*]} ; do
+                           FILE=ROC_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                           if [[ $BRV_BOOT -eq 1 ]] ; then
+                              FILE=${FILE}_S${NSAM}
+                           fi
+                           if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                              echo "${ecdir}/${FILE}.ps has been correctly created"
+                           else
+                              echo "There is a problem; ${ecdir}/${FILE}.ps is supposed to exist"
+                              exit
+                           fi
+                       done #REG loop
+                   done #PEVT loop
+                fi
+                if [[ $BRV_GIF = 1 ]] ; then
+                   for PEVT in ${PEVT_LIST[*]} ; do
+                       for REG in ${ALL_REG[*]} ; do
+                           FILE=BRV_${ROOT2}_${PAR}_${LEV}_T${PEVT}_M${BRV_PERM}_B${NPRO}_${IAFCM}-${IEFCM}_${REG}
+                           if [[ $BRV_BOOT -eq 1 ]] ; then
+                              FILE=${FILE}_S${NSAM}
+                           fi
+                           if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                              convert -rotate 90 ${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>../rel_reg_$ie.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+</div>
+EOF
+                           else
+                              echo "File missing"
+                              exit
+                           fi
+                       done #REG loop
+                    done #PEVT loop
+                fi
+                ip=$((ip+1))
+          done #ip (lead time periods)
+          iz=$((iz+1))
+    done #iz
+#
+# Copy in ECFS if required; only do it if ECSTORE is 1 and either the tar file was 
+# previously missing or a new postscript file has been created
+#
+    if [[ $BRV_ECST -eq 1 ]] ; then
+       emkdir -p ec:${ECDISK_LONG}/${ecdir}/
+       if [[ ${ECMISS} -eq 1 ]] ; then
+          tar -b 512 -cvf ${TARFILE}_ps.tar ${ecdir}/.
+          ecp -o ${TARFILE}_ps.tar ec:${ECDISK_LONG}/${ecdir}/
+          echmod 770 ec:${ECDISK_LONG}/${ecdir}/${TARFILE}_ps.tar
+          \rm -f ${TARFILE}_ps.tar
+       fi
+    fi # ECSTORE
+    cd ..
+    \rm -rf ${TARDIR}
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done #im
+#
+if [[ $BRV_GIF = 1 ]] ; then
+cat>>rel_map_$ie.html<<EOF
+</br>
+</body>
+</html>
+EOF
+cat>>rel_reg_$ie.html<<EOF
+</br>
+</body>
+</html>
+EOF
+   mv rel_map_$ie.html ${SMSGIF}/.
+   mv rel_reg_$ie.html ${SMSGIF}/.
+fi
+#
+date
+echo "end of plot_rel.sms"
+#
+%include <tail.h>

@@ -1,0 +1,50 @@
+set -evx
+set -A MM_LST 3 6 9 12
+set -A SEA_LST MAM JJA SON DJF
+set -A EXP_LST cru gpcp pe4o
+YY1=1980
+YY2=2002
+YY1=1960
+YY2=1978
+typeset -Z2 MON
+for EXP in ${EXP_LST[*]} ; do
+    n=0
+    for MM in ${MM_LST[*]} ; do
+        SEA=${SEA_LST[$n]}
+        \rm -f full.grb ${EXP}_${SEA}.grb
+        m=0
+        while [[ $m -lt 3 ]] ; do
+              YY=${YY1}
+              MON=$((MM+m))
+              if [[ $MON -gt 12 ]] ; then
+                 MON=$((MON-12))
+                 YY=$((YY1+1))
+              fi
+              while [[ $YY -le $YY2 ]] ; do
+                    FILE=228_000_${YY}${MON}0100
+                    ecp ec:/ENSEMBLES/verify/data/refe/${EXP}/${FILE} .
+                    cat $FILE >> full.grb
+                    \rm -f ${FILE}
+                    YY=$((YY+1))
+              done
+              m=$((m+1))
+        done
+mars<<EOF
+read,
+   source=full.grb,
+   param=228,
+   fieldset=toto1
+
+compute,
+   fieldset=toto2,
+   formula="mean(toto1)"
+
+write,
+   fieldset=toto2,
+   target=${EXP}_${SEA}.grb
+EOF
+        n=$((n+1))
+        mv ${EXP}_${SEA}.grb ${EXP}_${SEA}_${YY1}-${YY2}.grb
+    done
+    ls -ltr
+done

@@ -1,0 +1,47 @@
+#
+cd /scratch/rd/nep/data
+pwd
+#
+cat > getdata << EOF
+read,
+ source   = "/vol/demeter/verify/data/const/LSM_scw1",
+ fieldset = ori
+EOF
+#
+YY=1958
+while (( $YY <= 2002 )) ; do
+      for MM in 01 02 03 04 05 06 07 08 09 10 11 12 ; do
+              #
+          FILE=228_000_${YY}${MM}0100
+          ecp ec:/ENSEMBLES/verify/data/refe/${EXP}/${FILE} .
+cat >> getdata << EOF
+read,
+ source   = ${FILE},
+ param    = 228,
+ fieldset = A
+compute,
+ fieldset = B,
+ formula  = "nobitmap(A,0)"
+compute,
+ fieldset = C,
+ formula  = "(B>0) * 1"
+compute,
+ fieldset = D,
+ formula  = "C * ori"
+compute,
+ fieldset = ori,
+ formula  = "D * 1"
+EOF
+              #
+      done # MM
+      let YY=${YY}+1
+done # while YY
+#
+cat >> getdata << EOF
+write,
+ fieldset=ori,
+ target="LSM_scru"
+EOF
+#
+mars<getdata
+#

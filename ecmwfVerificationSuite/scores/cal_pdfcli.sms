@@ -1,0 +1,348 @@
+%manual
+NAME
+
+  cal_pdfcli - Computes climatological PDFs and percentiles for grid points
+
+DESCRIPTION
+
+  Computes the grid-point climatological PDFs and percentiles for experiments and reference
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_pdfcli.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST PERC PDFC
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Get and compile fortran files
+#
+#\rm -f cal_pdfcli.x
+if [[ -a cal_pdfcli.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_pdfcli.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_pdfcli.f tools.f -o cal_pdfcli.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_pdfcli.f tools.f -o cal_pdfcli.x $LINKLI1 $LINKLI3
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_pdfcli.x
+#
+if [[ $ie -lt $NUMMOD ]] ; then
+   export EXPID=${EXP_LIST[$ie]}
+   export TYPID=${TYP_LIST[$ie]}
+   export ORIID=${ORI_LIST[$ie]}
+   export CLAID=${CLA_LIST[$ie]}
+   export METID=${MET_LIST[$ie]}
+   export SYSID=${SYS_LIST[$ie]}
+   export STRID=${STR_LIST[$ie]}
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+PDF_TYPE=$PDF_TYP
+if [[ $TYPID = 1 ]] ; then
+   PDF_TYPE=ano
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}_mod.${JOB_ID}
+        \rm -rf ${TARDIR}
+        mkdir ${TARDIR}
+        cd ${TARDIR}
+        ECMISS_MOD[$id]=0 # This is 0 in case the tar file exists in ECFS
+        ECMISS_REF[$id]=0 # This is 0 in case the tar file exists in ECFS
+        ROOT1=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+        ecp -o ec:${ECDISK_LONG}/pdf/${ROOT1}.tar . || echo "${ROOT1}.tar is missing in ECFS"
+        if [[ -s ${ROOT1}.tar ]] ; then
+           tar xvf ${ROOT1}.tar
+           \rm -f ${ROOT1}.tar
+        else
+           echo "All the files will be created and a new tar file archived"
+           ECMISS_MOD[$id]=1
+        fi
+        cd ..
+        TARDIR=${DIAG}_ref.${JOB_ID}
+        \rm -rf ${TARDIR}
+        mkdir ${TARDIR}
+        cd ${TARDIR}
+        ROOTREF1=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+        ecp -o ec:${ECDISK}/data/refe/pdf/${ROOTREF1}.tar . || echo "${ROOTREF1}.tar is missing in ECFS"
+        if [[ -s ${ROOTREF1}.tar ]] ; then
+           tar xvf ${ROOTREF1}.tar
+           \rm -f ${ROOTREF1}.tar
+        else
+           echo "All the files will be created and a new tar file archived"
+           ECMISS_REF[$id]=1
+        fi
+        cd ..
+        id=$((id+1))
+    done #DIAG
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ANO_PAR ]] ; do
+          PAR=${ANO_PAR[$iz]}
+          LEV=${ANO_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+# loop over lead time periods
+#
+          ip=0
+          while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                IAFCM=${ALL_IAFCM[$ip]}
+                IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostic tar files
+#
+                id=0
+                EXEC=0
+                NDAT=1 # NDAT will take the value 2 if some reference files are also necessary
+#
+# Check if all the ouput files exist
+#
+                for DIAG in ${DIAG_LIST[*]} ; do
+                    TARDIR=${DIAG}_mod.${JOB_ID}
+                    ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    if [[ $DIAG = 'PERC' ]] ; then
+                       FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_M${PDF_PER}_${IAFCM}-${IEFCM}
+                    fi
+                    if [[ $DIAG = 'PDFC' ]] ; then
+                       FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_S${PDF_SIG}_${IAFCM}-${IEFCM}
+                    fi
+                    if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                       echo "${FILE}.grb exists"
+                    else
+                       EXEC=1
+                    fi
+                    TARDIR=${DIAG}_mod.${JOB_ID}
+                    ROOT2=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    if [[ $DIAG = 'PERC' ]] ; then
+                       FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_M${PDF_PER}_${IAFCM}-${IEFCM}
+                    fi
+                    if [[ $DIAG = 'PDFC' ]] ; then
+                       FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_S${PDF_SIG}_${IAFCM}-${IEFCM}
+                    fi
+                    if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                       echo "${FILE}.grb exists"
+                    else
+                       EXEC=1
+                       NDAT=2
+                    fi
+                    id=$((id+1))
+                done # id loop
+                if [[ $FORCEPDFC = 1 ]] ; then
+                   EXEC=1
+                   NDAT=2
+                fi
+#
+# Compute PDFs if necessary
+#
+cat > pdf_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  ndat=${NDAT},
+  type='${PDF_TYPE}',
+  permeth=${PDF_PER},
+  sigma=${PDF_SIG},
+ /
+EOF
+                if [[ $EXEC -eq 1 ]] ; then
+#
+# Get the climate files if necessary
+#
+                   if [[ $PDF_TYPE = ful ]] ; then
+                      if [[ -s CLIM_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV} ]] ; then
+                         echo "Climate file available"
+                      else
+                         ecp ec:${ECDISK_LONG}/clim/CLIM_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}.tar .
+                         tar xvf CLIM_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}.tar CLIM_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                      fi
+                      if [[ $NDAT = 2 ]] ; then
+                         if [[ -s CLIM_refe_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV} ]] ; then
+                            echo "Climate file available"
+                         else
+                            ecp ec:${ECDISK}/data/refe/clim/CLIM_refe_${YY1}-${YY2}_${MM}${DD}${TT}.tar .
+                            tar xvf CLIM_refe_${YY1}-${YY2}_${MM}${DD}${TT}.tar CLIM_refe_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                         fi
+                      fi
+                   fi
+#
+                   cat pdf_gen_$ie > pdfcli_$ie
+                   ./cal_pdfcli.x < pdfcli_$ie
+#
+# Collect results
+#
+                   id=0
+                   for DIAG in ${DIAG_LIST[*]} ; do
+                       TARDIR=${DIAG}_mod.${JOB_ID}
+                       ECMISS_MOD[$id]=1 # The new tar file will have to be archived in ECFS
+                       ROOT1=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       if [[ $DIAG = 'PERC' ]] ; then
+                          FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_M${PDF_PER}_${IAFCM}-${IEFCM}
+                       fi
+                       if [[ $DIAG = 'PDFC' ]] ; then
+                          FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_S${PDF_SIG}_${IAFCM}-${IEFCM}
+                       fi
+                       if [[ -s ${FILE}.grb ]] ; then
+                          mv ${FILE}.grb ${TARDIR}/.
+                       else
+                          echo "There is a problem; ${FILE}.grb is supposed to exist"
+                          exit
+                       fi
+                       if [[ $NDAT = 2 ]] ; then
+                          TARDIR=${DIAG}_ref.${JOB_ID}
+                          ECMISS_REF[$id]=1 # The new tar file will have to be archived in ECFS
+                          ROOTREF1=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                          ROOT2=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                          if [[ $DIAG = 'PERC' ]] ; then
+                             FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_M${PDF_PER}_${IAFCM}-${IEFCM}
+                          fi
+                          if [[ $DIAG = 'PDFC' ]] ; then
+                             FILE=${ROOT2}_${PAR}_${LEV}_${PDF_TYPE}_S${PDF_SIG}_${IAFCM}-${IEFCM}
+                          fi
+                          if [[ -s ${FILE}.grb ]] ; then
+                             mv ${FILE}.grb ${TARDIR}/.
+                          else
+                             echo "There is a problem; ${FILE}.grb is supposed to exist"
+                             exit
+                          fi
+                       fi
+                       id=$((id+1))
+                   done # id loop
+                fi # endif compute for experiment and reference
+                ip=$((ip+1))
+          done # ip endwhile
+          iz=$((iz+1))
+    done # iz endwhile
+#
+# Copy in ECFS if required
+#
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}_mod.${JOB_ID}
+        if [[ ${ECMISS_MOD[$id]} = 1 ]] ; then
+           if [[ $PDF_ECST -eq 1 ]] ; then
+              cd ${TARDIR}
+              ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+              tar -b 128 -cvf ../${ROOT}.tar .
+              cd ..
+              emkdir -p ec:${ECDISK_LONG}/pdf
+              ecp -o ${ROOT}.tar ec:${ECDISK_LONG}/pdf/
+              echmod 770 ec:${ECDISK_LONG}/pdf/${ROOT}.tar
+              \rm -f ${ROOT}.tar
+           fi # ECSTORE
+        fi
+        rm -rf ${TARDIR}
+        TARDIR=${DIAG}_ref.${JOB_ID}
+        if [[ ${ECMISS_REF[$id]} = 1 ]] ; then
+           if [[ $PDF_ECST -eq 1 ]] ; then
+              cd ${TARDIR}
+              ROOT=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+              tar -b 128 -cvf ../${ROOT}.tar .
+              cd ..
+              emkdir -p ec:${ECDISK}/data/refe/pdf
+              ecp -o ${ROOT}.tar ec:${ECDISK}/data/refe/pdf/
+              echmod 770 ec:${ECDISK}/data/refe/pdf/${ROOT}.tar
+              \rm -f ${ROOT}.tar
+           fi # ECSTORE
+        fi
+        rm -rf ${TARDIR}
+        id=$((id+1))
+    done # id loop
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_pdfcli.sms"
+#
+%include <tail.h>
+#

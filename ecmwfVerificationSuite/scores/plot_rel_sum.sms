@@ -1,0 +1,340 @@
+%manual
+NAME
+
+  plot_rel_sum - Plots summary of the probabilistic scores for dichotomous events
+
+DESCRIPTION
+
+  Plots bar diagrams of the probabilistic scores for dichotomous events for regional
+  areas for multi-forecast system predictions for all the start dates dealt with
+  as a summary of the skill.
+  Note that the output of this job is not stored in the tar files.
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of plot_rel_sum.sms"
+date
+#
+%include <sms_vars.h>
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+
+export MAGPLUS_VERSION=new
+use magics++
+
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+typeset -Z2 PEVT NPRO
+typeset -Z5 NSAM
+NSAM=$BRV_NSAM
+NPRO=$BRV_NPRO
+set -A DIAG_LIST BSS BSI REL RES SHA ROC
+#
+# Get and compile fortran files
+#
+\rm -f plot_rel_sum.x
+cp ${PATHSO}/plot_rel_sum.f .
+cp ${PATHSO}/tools.f .
+cp ${PATHSO}/tools_plot.f .
+
+pgf90 -g plot_rel_sum.f tools.f tools_plot.f -o plot_rel_sum.x $MAGPLUSLIB_SHARED $LINKLI1 $LINKLI3
+ls -ltr plot_rel*.x
+#
+# create psfile directory in working directory, if not already existent
+#
+for ecdir in psfiles ${SMSGIF}/giffiles ; do
+    if [[ -a $ecdir ]] ; then
+       echo "directory for $ecdir exists already"
+    else
+       mkdir $ecdir
+    fi
+done
+ecdir=psfiles
+#
+# Header for web page
+#
+if [[ $BRV_GIF = 1 ]] ; then
+   if [[ -s ${SMSGIF}/PopBox/scripts/PopBox.js ]] ; then
+      echo "Java script present"
+   else
+      cp -r /home/rd/ney/SkinLayer/sh/PopBox/ ${SMSGIF}
+   fi
+cat>rel_sum.html<<EOF
+<html><head>
+<title>Summary of probabilistic scores</title>
+<link id="lnkStyleSheet" rel="stylesheet" type="text/css" href="PopBox/stylesheets/Styles.css" />
+<script src="PopBox/scripts/PopBox.js"  type="text/javascript"></script>
+</head>
+<body>
+EOF
+fi
+#
+# Loop over experiments
+# In case of multi-model, plot for every model used
+#
+if [[ $MULTI -eq 1 ]] ; then
+   NUMCHECK=$NUMMOD
+else
+   NUMCHECK=$((NUMMOD-1))
+fi
+EXPM=""
+NENM=""
+TYPM=""
+ie=0
+while [[ $ie -le $NUMCHECK ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      if [[ $ie -lt $NUMMOD ]] ; then
+         export TYPID=${TYP_LIST[$ie]}
+         if [[ $TYPID = 0 ]] ; then
+            export ORIID=${ORI_LIST[$ie]}
+            export CLAID=${CLA_LIST[$ie]}
+            export METID=${MET_LIST[$ie]}
+            export SYSID=${SYS_LIST[$ie]}
+            export STRID=${STR_LIST[$ie]}
+         else
+            export ORIID=off
+            export CLAID=off
+            export METID=off
+            export SYSID=off
+            export STRID=off
+         fi
+         export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+      else
+%include <sms_vars.h>
+%include <def_exp3.h>
+      fi
+      EXPM="${EXPM},'${EXPID_LONG}'"
+      NENM="${NENM},${NENS}"
+      TYPM="${TYPM},${TYPID}"
+      ie=$((ie+1))
+done #ie
+NMOD=$((NUMCHECK+1))
+if [[ $NMOD -lt 15 ]] ; then
+   n=$NMOD
+   while [[ $n -lt 15 ]] ; do
+         EXPM="${EXPM},'none'"
+         NENM="${NENM},999"
+         TYPM="${TYPM},999"
+         n=$((n+1))
+   done
+fi
+EXPM=${EXPM#,}
+NENM=${NENM#,}
+TYPM=${TYPM#,}
+#
+# Loop over diagnostics
+#
+id=0
+for DIAG in ${DIAG_LIST[*]} ; do
+    TARDIR="${DIAG}.${JOB_ID}"
+    \rm -rf ${TARDIR}
+    mkdir ${TARDIR}
+    cp plot_rel_sum.x ${TARDIR}/.
+    cp reglist_139 ${TARDIR}/.
+    cp reglist_std ${TARDIR}/.
+    cd ${TARDIR}
+    mkdir ${ecdir}
+#
+# Copy archive with the output of calculations
+#
+    ie=0
+    while [[ $ie -le $NUMCHECK ]] ; do
+          export EXPID=${EXP_LIST[$ie]}
+          if [[ $ie -lt $NUMMOD ]] ; then
+             export TYPID=${TYP_LIST[$ie]}
+             if [[ $TYPID = 0 ]] ; then
+                export ORIID=${ORI_LIST[$ie]}
+                export CLAID=${CLA_LIST[$ie]}
+                export METID=${MET_LIST[$ie]}
+                export SYSID=${SYS_LIST[$ie]}
+                export STRID=${STR_LIST[$ie]}
+             else
+                export ORIID=off
+                export CLAID=off
+                export METID=off
+                export SYSID=off
+                export STRID=off
+             fi
+%include <def_exp1.h>
+          else
+%include <sms_vars.h>
+%include <def_exp3.h>
+          fi
+#
+          im=0
+          for MM in ${MM_LIST[*]} ; do
+              DD=${DD_LIST[$im]}
+              TT=${TT_LIST[$im]}
+              iz=0
+              while [[ $iz -le $TOT_ALL_PAR ]] ; do
+                    PAR=${ALL_PAR[$iz]}
+                    LEV=${ALL_LEV[$iz]}
+                    YYS=$YY1
+                    YYE=$YY2
+                    if [[ $PAR = 228 ]] ; then
+                       if [[ $YY1 -lt $YY1_228 ]] ; then
+                          YYS=$YY1_228
+                       fi
+                    fi
+                    ROOT=${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}
+                    if [[ -s ../BRV_${ROOT}.tar ]] ; then
+                       echo "Results already available"
+                    else
+                       ecp -o ec:${ECDISK_LONG}/rel/BRV_${ROOT}.tar .. || echo "BRV_${ROOT}.tar missing in ECFS"
+                    fi
+                    cp ../BRV_${ROOT}.tar .
+                    tar xvf BRV_${ROOT}.tar
+                    iz=$((iz+1))
+              done #iz
+              im=$((im+1))
+          done #MM
+          ie=$((ie+1))
+    done #ie
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ALL_PAR ]] ; do
+          PAR=${ALL_PAR[$iz]}
+          LEV=${ALL_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+          REG_LST=""
+          n=0
+          while [[ $n -lt $TOT_REG ]] ; do
+                REG_LST="${REG_LST} 0"
+                n=$((n+1))
+          done
+          set -A REG_LST $REG_LST
+          for REG in ${ALL_REG[*]} ; do
+              n=0
+              while [[ $n -lt $TOT_REG ]] ; do
+                    if [[ ${REG_NAM[$n]} == $REG ]] ; then
+                       REG_LST[$n]=1
+                    fi
+                    n=$((n+1))
+              done
+          done
+          rcal=""
+          n=0
+          while [[ $n -lt $TOT_REG ]] ; do
+                rcal="${rcal} ${REG_LST[$n]},"
+                n=$((n+1))
+          done
+cat > prel_regcal << EOF
+rcal=${rcal}
+ /
+EOF
+#
+cat > plo_rel_gen << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nenm=${NENM},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  nsdt=${NUMSEA},
+  imm=${MMlist},
+  idd=${DDlist},
+  itt=${TTlist},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nldt=${NLDT},
+  nf1=${SDlist},
+  nf2=${EDlist},
+  expm=${EXPM},
+  typm=${TYPM},
+  nmod=${NMOD},
+  mult=${MULTI},
+  dia='${DIAG}',
+  nevt=${BRV_NEVT},
+  pevt=${BRV_PEVT},
+  permeth=${BRV_PERM},
+  boot=${BRV_BOOT},
+  nsam=${BRV_NSAM},
+  iprb=${BRV_IPRB},
+  npro=${BRV_NPRO},
+  topth=${BRV_TOPTH},
+  botth=${BRV_BOTTH},
+EOF
+cat > plo_rel_nre << EOF
+  nreg=${TOT_REG},
+EOF
+cat > plo_rel_end << EOF
+ /
+EOF
+          if [[ $PAR -eq 139 ]] ; then
+             cat plo_rel_gen plo_rel_nre plo_rel_end reglist_139 prel_regcal > plo_rel_sum
+          else
+             cat plo_rel_gen plo_rel_nre plo_rel_end reglist_std prel_regcal > plo_rel_sum
+          fi
+          cat plo_rel_sum
+          ./plot_rel_sum.x < plo_rel_sum
+#
+          for PEVT in ${PEVT_LIST[*]} ; do
+              for REG in ${ALL_REG[*]} ; do
+                  FILE=${DIAG}_${YYS}-${YYE}_CV${CROS}_I${ANIN}_${PAR}_${LEV}_T${PEVT}_B${NPRO}_${REG}
+                  if [[ $BRV_BOOT = 1 ]] ; then
+                     FILE=${FILE}_S${NSAM}
+                  fi
+                  FILE=${FILE}_sum
+                  if [[ -s ${ecdir}/${FILE}.ps ]] ; then
+                     cp ${ecdir}/${FILE}.ps ${SMSWORK}/${ecdir}/.
+                     if [[ $BRV_GIF = 1 ]] ; then
+                        convert -rotate 90 ${ecdir}/${FILE}.ps ${SMSGIF}/giffiles/${FILE}.gif
+cat>>../rel_sum.html<<EOF
+<div style="margin: 0.5em 0.8em 0.5em 0; float:left">
+<img id="$FILE.gif" alt="$FILE.gif"
+src="giffiles/$FILE.gif"
+pbshowcaption="true"
+pbcaption="$FILE.gif"
+style="width: 525px; height: 350px;"
+class="PopBoxImageSmall" title="Click to magnify/shrink"
+onclick="Pop(this,50,'PopBoxImageLarge');" /><br />
+</div>
+EOF
+                     fi
+                  else
+                     echo "File ${ecdir}/${FILE}.ps should have been created"
+                     exit
+                  fi
+              done #REG loop
+          done #PEVT loop
+         iz=$((iz+1))
+    done #iz
+    cd ..
+    \rm -rf ${TARDIR}
+    id=$((id+1))
+done #id (diagnostics)
+\rm -f BRV*tar
+#
+cat>>rel_sum.html<<EOF
+</br>
+</body>
+</html>
+EOF
+mv rel_sum.html ${SMSGIF}/
+#
+date
+echo "end of plot_rel_sum.sms"
+#
+%include <tail.h>

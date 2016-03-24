@@ -1,0 +1,297 @@
+%manual
+NAME
+
+  cal_bias - Computes the bias
+
+DESCRIPTION
+
+  Computes the climatology and the biases of the experiment
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_bias.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+cd $SMSWORK
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST BIAS SDRT CLIM STDV
+#
+# Get and compile fortran files
+#
+\rm -f cal_bias.x
+cp ${PATHSO}/cal_bias.f .
+cp ${PATHSO}/tools.f .
+#pgf90 $COMPOP1 cal_bias.f tools.f -o cal_bias.x $LINKLI1 $LINKLI3
+echo $LINKLI3
+gfortran $COMPOP1 cal_bias.f tools.f -o cal_bias.x $LINKLI1 $LINKLI3
+ls -l cal_bias.x
+#
+# Loop over experiments
+# In case of creating multi-forecast system (MULTI=1), compute for every model used.
+# In case of the experiment being a multi-forecast system, skip the bias calculation.
+#
+ie=0
+while [[ $ie -lt $NUMMOD ]] ; do
+      export EXPID=${EXP_LIST[$ie]}
+      export TYPID=${TYP_LIST[$ie]}
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+      export NENS=${NEN_LIST[$ie]}
+#
+# Only compute if it is not a multi-forecast system or if the monthly means are present
+#
+      if [[ $TYPID = 1 && $FORCEBIAS = 1 ]] ; then
+         echo "Contradiction; bias calculation can not be forced without the monthly mean files"
+         exit
+      fi
+      if [[ $TYPID = 0 ]] ; then
+%include <def_exp1.h>
+#
+# Loop over months
+#
+         im=0
+         for MM in ${MM_LIST[*]} ; do
+             echo "Start date "$MM
+             DD=${DD_LIST[$im]}
+             TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+             id=0
+             for DIAG in ${DIAG_LIST[*]} ; do
+                 TARDIR=${DIAG}_mod.${JOB_ID}
+                 \rm -rf ${TARDIR}
+                 mkdir ${TARDIR}
+                 cd ${TARDIR}
+#
+# Check if the specific tar file already exists
+#
+                 ECMISS_MOD[$id]=0
+                 ECMISS_REF[$id]=0
+                 ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                 ecp -o ec:${ECDISK_LONG}/clim/${ROOT}.tar . || echo "${ROOT}.tar missing"
+                 if [[ -s ${ROOT}.tar ]] ; then
+                    tar xvf ${ROOT}.tar
+                    \rm -f ${ROOT}.tar
+                 else
+                    ECMISS_MOD[$id]=1
+                 fi
+                 cd ..
+                 TARDIR=${DIAG}_ref.${JOB_ID}
+                 \rm -rf ${TARDIR}
+                 mkdir ${TARDIR}
+                 cd ${TARDIR}
+                 if [[ $DIAG = 'CLIM' || $DIAG = 'STDV' ]] ; then
+                    ROOTREF=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}
+                    ecp -o ec:${ECDISK}/data/refe/clim/${ROOTREF}.tar . || echo "${ROOTREF}.tar missing"
+                    if [[ -s ${ROOTREF}.tar ]] ; then
+                       tar xvf ${ROOTREF}.tar
+                       \rm -f ${ROOTREF}.tar
+                    else
+                       ECMISS_REF[$id]=1
+                    fi
+                 fi
+                 cd ..
+                 id=$((id+1))
+             done #DIAG
+#
+# Loop over fields
+#
+             iz=0
+             while [[ $iz -le $TOT_ALL_PAR ]] ; do
+                   PAR=${ALL_PAR[$iz]}
+                   LEV=${ALL_LEV[$iz]}
+                   YYS=$YY1
+                   YYE=$YY2
+                   if [[ $PAR = 228 ]] ; then
+                      if [[ $YY1 -lt $YY1_228 ]] ; then
+                         YYS=$YY1_228
+                      fi
+                   fi
+#
+cat > bias_list << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  ipar=${PAR},
+  ilev=${LEV},
+  expt='${EXPID_LONG}',
+ /
+EOF
+#
+# Check if it needs to run
+#
+                   EXEC=0
+                   idealsize=$NMON
+                   echo "Number of fields for this file "$idealsize
+                   id=0
+                   for DIAG in ${DIAG_LIST[*]} ; do
+                       TARDIR=${DIAG}_mod.${JOB_ID}
+                       MISS_MOD[$id]=0
+                       MISS_REF[$id]=0
+                       FILE=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                       if [[ -s ${TARDIR}/${FILE} ]] ; then
+                           #/home/ma/emos/bin/${ARCH}/GRIB_profile ${TARDIR}/${FILE} > list0
+                           #grib_ls ${TARDIR}/${FILE} > list0
+                           #wc list0 > list1
+                           #cut -c 1-8 list1 | read fakesize
+                           #lastsize=$((fakesize-5))
+                          lastsize=`grib_count ${TARDIR}/${FILE}`
+                       else
+                          lastsize=0
+                       fi
+                       echo $lastsize
+                       if [[ -s ${TARDIR}/${FILE} && $lastsize -ge $idealsize ]] ; then
+                          echo "The file ${FILE} already exists and has the correct size"
+                       else
+                          MISS_MOD[$id]=1
+                          ECMISS_MOD[$id]=1
+                          EXEC=1
+                       fi
+                       TARDIR=${DIAG}_ref.${JOB_ID}
+                       if [[ $DIAG = 'CLIM' || $DIAG = 'STDV' ]] ; then
+                          FILE=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                          if [[ -s ${TARDIR}/${FILE} ]] ; then
+                              #/home/ma/emos/bin/${ARCH}/GRIB_profile ${TARDIR}/${FILE} > list0
+                              #grib_ls ${TARDIR}/${FILE} > list0
+                              #wc list0 > list1
+                              #cut -c 1-8 list1 | read fakesize
+                              #lastsize=$((fakesize-5))
+                             lastsize=`grib_count ${TARDIR}/${FILE}`
+                          else
+                             lastsize=0
+                          fi
+                          echo $lastsize
+                          if [[ -s ${TARDIR}/${FILE} && $lastsize -ge $idealsize ]] ; then
+                             echo "The file ${FILE} already exists and has the correct size"
+                          else
+                             MISS_REF[$id]=1
+                             ECMISS_REF[$id]=1
+                             EXEC=1
+                          fi
+                       fi
+                       if [[ $FORCEBIAS = 1 ]] ; then
+                          EXEC=1
+                          MISS_MOD[$id]=1
+                          ECMISS_MOD[$id]=1
+                          MISS_REF[$id]=1
+                          ECMISS_REF[$id]=1
+                       fi
+                       id=$((id+1))
+                   done #DIAG
+#
+# Run if necessary
+#
+                   if [[ $EXEC -eq 1 ]] ; then
+                      ./cal_bias.x < bias_list
+#
+# Collect results in the tar file
+#
+                      id=0
+                      for DIAG in ${DIAG_LIST[*]} ; do
+                          TARDIR=${DIAG}_mod.${JOB_ID}
+                          if [[ ${MISS_MOD[$id]} -eq 1 ]] then
+                             ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                             FILE=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                             if [[ -s $FILE ]] ; then
+                                mv $FILE ${TARDIR}/.
+                             else
+                                echo "Problem; the file ${FILE} has not been generated"
+                                exit
+                             fi
+                          fi
+                          TARDIR=${DIAG}_ref.${JOB_ID}
+                          if [[ $DIAG = 'CLIM' || $DIAG = 'STDV' ]] ; then
+                             if [[ ${MISS_REF[$id]} -eq 1 ]] then
+                                ROOTREF=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}
+                                FILE=${DIAG}_refe_${YYS}-${YYE}_${MM}${DD}${TT}_${PAR}_${LEV}
+                                if [[ -s $FILE ]] ; then
+                                   mv $FILE ${TARDIR}/.
+                                else
+                                   echo "Problem; the file ${FILE} has not been generated"
+                                   exit
+                                fi
+                             fi
+                          fi
+                          id=$((id+1))
+                      done #DIAG
+                   fi
+                   iz=$((iz+1))
+             done #iz 
+#
+# Copy in ECFS if required; only do it if BIAS_ECST is 1 and the tar file was previously missing or has been modified
+#
+             id=0
+             for DIAG in ${DIAG_LIST[*]} ; do
+                 TARDIR=${DIAG}_mod.${JOB_ID}
+                 ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}
+                 if [[ $BIAS_ECST -eq 1 ]] ; then
+                    if [[ ${ECMISS_MOD[$id]} -eq 1 ]] ; then
+                       cd ${TARDIR}
+                       tar -b 128 -cvf ../${ROOT}.tar .
+                       cd ..
+                       emkdir -p ec:${ECDISK_LONG}/clim
+                       ecp -o ${ROOT}.tar ec:${ECDISK_LONG}/clim/
+                       echmod 770 ec:${ECDISK_LONG}/clim/${ROOT}.tar
+                    fi
+                    \rm -f ${ROOT}.tar
+                 fi
+                 rm -rf ${TARDIR}
+                 if [[ $DIAG = 'CLIM' || $DIAG = 'STDV' ]] ; then
+                    TARDIR=${DIAG}_ref.${JOB_ID}
+                    ROOTREF=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}
+                    if [[ $BIAS_ECST -eq 1 ]] ; then
+                       if [[ ${ECMISS_REF[$id]} -eq 1 ]] ; then
+                          cd ${TARDIR}
+                          tar -b 128 -cvf ../${ROOTREF}.tar .
+                          cd ..
+                          emkdir -p ec:${ECDISK}/data/refe/clim
+                          ecp -o ${ROOTREF}.tar ec:${ECDISK}/data/refe/clim/
+                          echmod 770 ec:${ECDISK}/data/refe/clim/${ROOTREF}.tar
+                       fi
+                       \rm -f ${ROOTREF}.tar
+                    fi
+                    rm -rf ${TARDIR}
+                 fi
+                 id=$((id+1))
+             done #DIAG
+             im=$((im+1))
+             echo "End of start date "$MM
+         done #im
+      fi #TYP eq 0
+      ie=$((ie+1))
+done #ie
+#
+date
+echo "end of cal_bias.sms" 
+#
+%include <tail.h>
+#

@@ -1,0 +1,339 @@
+%manual
+NAME
+
+  cal_eof - Computes EOFs
+
+DESCRIPTION
+
+  Computes EOFs for selected regions and variables
+  defined in config.h
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_eof.sms"
+#
+%include <sms_vars.h>
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Get and compile fortran files
+#
+if [[ -a cal_proj.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_eof.f .
+      cp ${PATHSO}/cal_ts_sco.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_eof.f tools.f -o cal_eof.x $LINKLI1 $LINKLI3
+      #pgf90 $COMPOP1 cal_ts_sco.f tools.f -o cal_ts_sco.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_eof.f tools.f -o cal_eof.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_ts_sco.f tools.f -o cal_ts_sco.x $LINKLI1 $LINKLI3
+      
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_*.x
+#
+export EXPID=${EXP_LIST[$ie]}
+if [[ $ie -lt $NUMMOD ]] ; then
+   export TYPID=${TYP_LIST[$ie]}
+   if [[ $TYPID = 0 ]] ; then
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+   else
+      export ORIID=off
+      export CLAID=off
+      export METID=off
+      export SYSID=off
+      export STRID=off
+   fi
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+    ECMISS=0 # This is 0 in case the tar file exists in ECFS
+    ROOT=TS_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+    TARFILE=${ROOT}
+    ecp -o ec:${ECDISK_LONG}/ts/${TARFILE}.tar . || echo "${TARFILE}.tar is missing in ECFS"
+    if [[ -s ${TARFILE}.tar ]] ; then
+       tar xvf ${TARFILE}.tar
+       echo "WARNING: Files for the experiment already exist"
+       echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+    else
+       echo "All the files will be created and a new tar file archived"
+       ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+    fi
+#
+# loop over lead time periods
+#
+    ip=0
+    while [[ $ip -le $TOT_ALL_DIA ]] ; do
+          IAFCM=${ALL_IAFCM[$ip]}
+          IEFCM=${ALL_IEFCM[$ip]}
+#
+# Check if all the ouput files exist
+#
+          EOF_LST=""
+          n=0
+          while [[ $n -lt $TOT_EOF ]] ; do
+                EOF_LST="${EOF_LST} 0"
+                n=$((n+1))
+          done
+          set -A EOF_LST $EOF_LST
+#
+          NAM_LST=""
+          NUM_LST=""
+          PAR_LST=""
+          LEV_LST=""
+          YYS_LST=""
+          YYE_LST=""
+          DIA_EOF=""
+          n=0
+          nts=0
+          for EOF in ${EOF_NAM[*]} ; do
+              dia_eof=1
+              m=1
+              while [[ $m -le ${EOF_NUM[$n]} ]] ; do
+                    EOFF=${EOF}${m}
+                    for TS in ${TSDIA[*]} ; do
+                        if [[ $TS == $EOFF ]] ; then
+                           dia_eof=2
+                        fi
+                    done
+                    m=$((m+1))
+              done
+              if [[ $dia_eof -eq 2 ]] ; then
+                 echo "Considering the index $EOF"
+                 NUM=${EOF_NUM[$n]}
+                 PAR=${EOF_PAR[$n]}
+                 LEV=${EOF_LEV[$n]}
+                 YYS=$YY1
+                 YYE=$YY2
+                 if [[ $PAR = 228 ]] ; then
+                    if [[ $YY1 -lt $YY1_228 ]] ; then
+                       YYS=$YY1_228
+                    fi
+                 fi
+                 ROOT=TS_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                 m=1
+                 while [[ $m -le ${NUM} ]] ; do
+                       EOFF=${EOF}${m}
+                       FILE=${ROOT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}_${EOFF}
+                       if [[ -s ${FILE} ]] ; then
+                          echo "${FILE} already exists"
+                       else
+                          DIA_EOF="${DIA_EOF} ${EOF}"
+                          nts=$((nts+1))
+                          NAM_LST="${NAM_LST} ${EOF}"
+                          NUM_LST="${NUM_LST} ${NUM}"
+                          PAR_LST="${PAR_LST} ${PAR}"
+                          LEV_LST="${LEV_LST} ${LEV}"
+                          YYS_LST="${YYS_LST} ${YYS}"
+                          YYE_LST="${YYE_LST} ${YYE}"
+                       fi
+                       m=$((m+1))
+                 done
+              fi
+              n=$((n+1))
+          done
+#
+          if [[ $nts -gt 0 ]] ; then
+             set -A DIA_EOF $DIA_EOF
+             set -A NAM_LST $NAM_LST
+             set -A NUM_LST $NUM_LST
+             set -A PAR_LST $PAR_LST
+             set -A LEV_LST $LEV_LST
+             set -A YYS_LST $YYS_LST
+             set -A YYE_LST $YYE_LST
+             for EOF in ${DIA_EOF[*]} ; do
+                 n=0
+                 while [[ $n -lt $TOT_EOF ]] ; do
+                       if [[ ${EOF_NAM[$n]} == $EOF ]] ; then
+                          EOF_LST[$n]=1
+                       fi
+                       n=$((n+1))
+                 done
+             done
+             rcal=""
+             n=0
+             while [[ $n -lt $TOT_EOF ]] ; do
+                   rcal="${rcal} ${EOF_LST[$n]},"
+                   n=$((n+1))
+             done
+cat > ceof_rcal_$ie << EOF
+rcal=${rcal}
+ /
+EOF
+#
+# Compute projections if necessary
+#
+cat > eof_$ie << EOF
+ &control
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  neof=${TOT_EOF},
+ /
+EOF
+             ECMISS=1 # The new tar file will have to be archived in ECFS
+             cat eof_$ie eoflist_std ceof_rcal_$ie > eof_list_$ie
+             ./cal_eof.x < eof_list_$ie
+#
+# Compute scores and inflate
+#
+             namet=""
+             par=""
+             lev=""
+             yy1=""
+             yy2=""
+             n=0
+             while [[ $n -lt $nts ]] ; do
+                   namet="${namet} '${NAM_LST[$n]}',"
+                   par="${par} ${PAR_LST[$n]},"
+                   lev="${lev} ${LEV_LST[$n]},"
+                   yy1="${yy1} ${YYS_LST[$n]},"
+                   yy2="${yy2} ${YYE_LST[$n]},"
+                   n=$((n+1))
+             done
+             while [[ $n -lt 50 ]] ; do
+                   namet="${namet} 'NONE',"
+                   par="${par} 999,"
+                   lev="${lev} 999,"
+                   yy1="${yy1} 999,"
+                   yy2="${yy2} 999,"
+                   n=$((n+1))
+             done
+#
+cat > scots_$ie << EOF
+ &control
+  nens=${NENS},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nts=${nts},
+ /
+EOF
+cat > scots_rcal_$ie << EOF
+ &timeseries
+  namet=${namet}
+  par=${par}
+  lev=${lev}
+  yy1=${yy1}
+  yy2=${yy2}
+ /
+EOF
+             cat scots_$ie scots_rcal_$ie > scots_list_$ie
+#            ./cal_ts_sco.x < scots_list_$ie
+#
+# Collect results
+#
+             n=0
+             for NAM in ${NAM_LST[*]} ; do
+                 PAR=${PAR_LST[$n]}
+                 LEV=${LEV_LST[$n]}
+                 YYS=${YYS_LST[$n]}
+                 YYE=${YYE_LST[$n]}
+                 ROOT=TS_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                 FILE=${ROOT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}_${NAM}
+                 if [[ -s ${FILE} ]] ; then
+                    if [[ -s ${TARFILE}.tar ]] ; then
+                       tar rf ${TARFILE}.tar ${FILE} # Include the projection
+                    else
+                       tar cvf ${TARFILE}.tar ${FILE} # Include the projection
+                    fi
+                 fi
+                 n=$((n+1))
+             done # FILE loop
+          fi
+          ip=$((ip+1))
+    done # ip endwhile
+#
+# Copy in ECFS if required
+#
+    if [[ $TS_ECST -eq 1 ]] ; then
+       emkdir -p ec:${ECDISK_LONG}/ts
+       if [[ ${ECMISS} -eq 1 ]] ; then
+          ecp -o ${TARFILE}.tar ec:${ECDISK_LONG}/ts/
+          echmod 770 ec:${ECDISK_LONG}/ts/${TARFILE}.tar
+       fi
+    fi # ECSTORE
+    \rm -f ${TARFILE}.tar
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_eof.sms"
+#
+%include <tail.h>
+#

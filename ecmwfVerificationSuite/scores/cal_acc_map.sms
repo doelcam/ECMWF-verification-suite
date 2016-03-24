@@ -1,0 +1,279 @@
+%manual
+NAME
+
+  cal_acc_map - Computes ACC for grid points
+
+DESCRIPTION
+
+  Computes the grid-point ensemble-mean scores
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_acc_map.sms"
+#
+%include <sms_vars.h>
+cd $SMSWORK
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+set -A DIAG_LIST ACC ACP SPR MSS RSR
+typeset -Z5 NSAM
+NSAM=$ACC_NSAM
+
+#GRIB_GRIBEX_MODE_ON=1
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 300
+fi
+#
+# Get and compile fortran files
+#
+#rm -f cal_acc_map.x
+if [[ -a cal_acc_map.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_acc_map.f .
+      cp ${PATHSO}/tools.f .
+     # pgf90 $COMPOP1 cal_acc_map.f tools.f -o cal_acc_map.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_acc_map.f tools.f -o cal_acc_map.x $LINKLI1 $LINKLI3  
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_acc_map.x
+#
+if [[ $ie -lt $NUMMOD ]] ; then
+   export EXPID=${EXP_LIST[$ie]}
+   export TYPID=${TYP_LIST[$ie]}
+   export ORIID=${ORI_LIST[$ie]}
+   export CLAID=${CLA_LIST[$ie]}
+   export METID=${MET_LIST[$ie]}
+   export SYSID=${SYS_LIST[$ie]}
+   export STRID=${STR_LIST[$ie]}
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# Loop over months
+#
+im=0
+for MM in ${MM_LIST[*]} ; do
+    echo "Start date "$MM
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+    ECMISS=0 # This is 0 in case the tar file exists in ECFS
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}.${JOB_ID}
+        mkdir -p ${TARDIR}
+        cd ${TARDIR}
+        ROOT1=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+        ecp -o ec:${ECDISK_LONG}/acc/${ROOT1}.tar . || echo "${ROOT1}.tar is missing in ECFS"
+        if [[ -s ${ROOT1}.tar ]] ; then
+           tar xvf ${ROOT1}.tar
+           \rm -f ${ROOT1}.tar
+           echo "WARNING: Files for the experiment already exist"
+           echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+        else
+           echo "All the files will be created and a new tar file archived"
+           ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+        fi
+        cd ..
+        id=$((id+1))
+    done #DIAG
+#
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ANO_PAR ]] ; do
+          PAR=${ANO_PAR[$iz]}
+          LEV=${ANO_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+# loop over lead time periods
+#
+          ip=0
+          while [[ $ip -le $TOT_ALL_DIA ]] ; do
+                IAFCM=${ALL_IAFCM[$ip]}
+                IEFCM=${ALL_IEFCM[$ip]}
+#
+# Loop over diagnostic tar files
+#
+                id=0
+                compute=1
+                for DIAG in ${DIAG_LIST[*]} ; do
+                    TARDIR=${DIAG}.${JOB_ID}
+                    ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+#
+# Check if all the ouput files exist
+#
+                    FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+		    
+		    
+                    if [[ -s ${TARDIR}/${FILE}.grb ]] ; then
+                       echo "${FILE}.grb exists"
+		    	    \rm -r ${TARDIR}/${FILE}.grb
+			     echo "deleting file and recomupting"
+			     compute=2
+                    else
+                       compute=2
+                    fi
+                    if [[ $ACC_BOOT -eq 1 ]] ; then
+                       if [[ $DIAG != 'ACP' && $DIAG != 'SPR' ]] ; then
+                          if [[ -s ${TARDIR}/${FILE}_S${NSAM}.grb ]] ; then
+                             echo "${FILE}_S${NSAM}.grb exists"
+			     
+		    	    \rm -r ${TARDIR}/${FILE}_S${NSAM}.grb
+			     echo "deleting file and recomupting"
+			     compute=2
+                          else
+                             compute=2
+                          fi
+                       fi
+                    fi
+                    if [[ $FORCEACC = 1 ]] ; then
+                       compute=2
+                    fi
+                    id=$((id+1))
+                done # id loop
+#
+# Compute ACC files if necessary
+#
+cat > acc_gen_$ie << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  nens=${NENS},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  boot=${ACC_BOOT},
+  nsam=${ACC_NSAM},
+  topth=${ACC_TOPTH},
+  botth=${ACC_BOTTH},
+ /
+EOF
+                if [[ $compute -eq 2 ]] ; then
+                   ECMISS=1 # The new tar file will have to be archived in ECFS
+                   cat acc_gen_$ie > acc_map_$ie
+                   ./cal_acc_map.x < acc_map_$ie
+#
+# Collect results
+#
+                   id=0
+                   for DIAG in ${DIAG_LIST[*]} ; do
+                       TARDIR=${DIAG}.${JOB_ID}
+                       ROOT2=${DIAG}_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                       FILE=${ROOT2}_${PAR}_${LEV}_${IAFCM}-${IEFCM}
+                       if [[ -s ${FILE}.grb ]] ; then
+                          mv ${FILE}.grb ${TARDIR}/
+                       else
+                          echo "The file ${FILE}.grb is supposed to exist"
+                          exit
+                       fi
+                       if [[ $DIAG != 'ACP' && $DIAG != 'SPR' ]] ; then
+                          if [[ $ACC_BOOT -eq 1 ]] ; then
+                             if [[ -s ${FILE}_S${NSAM}.grb ]] ; then
+                                mv ${FILE}_S${NSAM}.grb ${TARDIR}/.
+                             else
+                                echo "The file ${FILE}_S${NSAM}.grb is supposed to exist"
+                                exit
+                             fi
+                          fi
+                       fi
+                       id=$((id+1))
+                   done # id loop
+                fi # endif compute for experiment
+                ip=$((ip+1))
+          done # ip endwhile
+          iz=$((iz+1))
+    done # iz endwhile
+#
+# Copy in ECFS if required
+#
+    id=0
+    for DIAG in ${DIAG_LIST[*]} ; do
+        TARDIR=${DIAG}.${JOB_ID}
+        ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+        if [[ $ACSP_ECST -eq 1 ]] ; then
+           if [[ $ECMISS -eq 1 ]] ; then
+              emkdir -p ec:${ECDISK_LONG}/acc
+              cd ${TARDIR}
+              tar -b 512 -cvf ../${ROOT}.tar .
+              cd ..
+              ecp -o ${ROOT}.tar ec:${ECDISK_LONG}/acc/
+              echmod 770 ec:${ECDISK_LONG}/acc/${ROOT}.tar
+              \rm -f ${ROOT}.tar
+           fi
+        fi # ECSTORE
+        \rm -rf ${TARDIR}
+        id=$((id+1))
+    done # id loop
+#
+    echo "End of start date "$MM
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_acc_map.sms"
+#
+%include <tail.h>
+#

@@ -1,0 +1,403 @@
+%manual
+NAME
+
+  cal_ts - Time series
+
+DESCRIPTION
+
+  Computes the time series and their scores
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_ts.sms"
+#
+%include <sms_vars.h>
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+# Loop over experiments
+# In case of multi-model, compute for every model used
+#
+ie=%NUM%
+if [[ $ie -ne 0 ]] ; then
+   sleep 100
+fi
+#
+# Get and compile fortran files
+#
+#rm -rf cal_ts*
+
+if [[ -s cal_ts.x ]] ; then
+   echo "Executable file present"
+else
+   if [[ $ie -eq 0 ]] ; then
+      cp ${PATHSO}/cal_ts.f .
+      cp ${PATHSO}/cal_ts_sco.f .
+      cp ${PATHSO}/tools.f .
+      #pgf90 $COMPOP1 cal_ts.f tools.f -o cal_ts.x $LINKLI1 $LINKLI3
+      #pgf90 $COMPOP1 cal_ts_sco.f tools.f -o cal_ts_sco.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_ts.f tools.f -o cal_ts.x $LINKLI1 $LINKLI3
+      gfortran $COMPOP1 cal_ts_sco.f tools.f -o cal_ts_sco.x $LINKLI1 $LINKLI3
+      
+   else
+      echo "Compile by hand"
+   fi
+fi
+ls -l cal_*.x
+
+
+#
+export EXPID=${EXP_LIST[$ie]}
+if [[ $ie -lt $NUMMOD ]] ; then
+   export TYPID=${TYP_LIST[$ie]}
+   if [[ $TYPID = 0 ]] ; then
+      export ORIID=${ORI_LIST[$ie]}
+      export CLAID=${CLA_LIST[$ie]}
+      export METID=${MET_LIST[$ie]}
+      export SYSID=${SYS_LIST[$ie]}
+      export STRID=${STR_LIST[$ie]}
+   else
+      export ORIID=off
+      export CLAID=off
+      export METID=off
+      export SYSID=off
+      export STRID=off
+   fi
+   export NENS=${NEN_LIST[$ie]}
+%include <def_exp1.h>
+else
+%include <sms_vars.h>
+%include <def_exp3.h>
+fi
+#
+# Land-sea mask
+#
+if [ -a LSM_${EXPID_LONG} ] ; then
+   EX=cat
+else
+   EX=mars
+fi
+$EX <<@@
+RETRIEVE,
+   PARAM=172,
+   TYPE=an,
+   CLASS=od,
+   LEVTYPE=sfc,
+   EXPVER=1,
+   STREAM=oper,
+   REPRES=ll,
+   DATE=1986-12-20,
+   GRID=2.5/2.5,
+   AREA=${north}/${east}/${south}/${west},
+   TARGET=LSM_${EXPID_LONG}
+@@
+#
+# DM Added date argument in MARS request (otherwise tries to access current day data - restricted)
+# List of time series required
+#
+TS_DIA=""
+dia_ts=1
+set +xv
+for TS1 in ${TS_NAM[*]} ; do
+    sel_ts=0
+    for TS2 in ${TSDIA[*]} ; do
+        if [[ $TS2 == $TS1 ]] ; then
+           dia_ts=2
+           sel_ts=1
+        fi
+    done
+    TS_DIA="${TS_DIA} ${sel_ts}"
+done
+set -xv
+#
+# Only compute if something is missing
+#
+if [[ $dia_ts = 2 ]] ; then
+#
+# Get basin boundaries
+#
+   if [[ ! -d const ]] ; then
+      mkdir const
+   fi
+   cd const
+   if [[ ! -s basins.tar ]] ; then
+      ecp ec:/ENSEMBLES/verify/data/support/basins.tar .
+   fi
+   tar xvf basins.tar
+   cd ..
+#
+# Loop over months
+#
+   set -A TS_DIA $TS_DIA
+   DIAG=TS
+   im=0
+   for MM in ${MM_LIST[*]} ; do
+       echo "Start date "$MM
+       DD=${DD_LIST[$im]}
+       TT=${TT_LIST[$im]}
+#
+# Loop over diagnostic tar files
+#
+       ECMISS=0 # This is 0 in case the tar file exists in ECFS
+       TARDIR=${DIAG}_mod.${JOB_ID}
+       \rm -rf ${TARDIR}
+       mkdir ${TARDIR}
+       cd ${TARDIR}
+       ROOT=${DIAG}_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+       TARFILE=${ROOT}
+       ecp -o ec:${ECDISK_LONG}/ts/${TARFILE}.tar . || echo "${TARFILE}.tar is missing in ECFS"
+       if [[ -s ${TARFILE}.tar ]] ; then
+          tar xvf ${TARFILE}.tar
+          \rm -f ${TARFILE}.tar
+          echo "WARNING: Files for the experiment already exist"
+          echo "If you want to create new ones, remove the tar file from both ECFS and the working directory"
+       else
+          echo "All the files will be created and a new tar file archived"
+          ECMISS=1 # This is 1 because the whole tar archive will be created and archived
+       fi
+       cd ..
+#
+       TARDIR=${DIAG}_ref.${JOB_ID}
+       \rm -rf ${TARDIR}
+       mkdir ${TARDIR}
+       cd ${TARDIR}
+       ROOTREF=${DIAG}_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+       ecp -o ec:${ECDISK}/data/refe/ts/${ROOTREF}.tar . || echo "${TARFILE}.tar is missing in ECFS"
+       if [[ -s ${ROOTREF}.tar ]] ; then
+          tar xvf ${ROOTREF}.tar
+          \rm -f ${ROOTREF}.tar
+          echo "WARNING: Files for the experiment already exist"
+       fi
+       cd ..
+#
+# loop over lead time periods
+#
+       ip=0
+       while [[ $ip -le $TOT_ALL_DIA ]] ; do
+             IAFCM=${ALL_IAFCM[$ip]}
+             IEFCM=${ALL_IEFCM[$ip]}
+#
+# Check if all the ouput files exist
+#
+             TS_LST=""
+             for TS in ${TS_NAM[*]} ; do
+                 TS_LST="${TS_LST} 0"
+             done
+             set -A TS_LST $TS_LST
+#
+             NAM_LST=""
+             PAR_LST=""
+             LEV_LST=""
+             YYS_LST=""
+             YYE_LST=""
+             n=0
+             nts=0
+             iyys=""
+             iyye=""
+             for TS in ${TS_NAM[*]} ; do
+                 TARDIR=${DIAG}_mod.${JOB_ID}
+                 PAR=${TS_PAR[$n]}
+                 LEV=${TS_LVL[$n]}
+                 YYS=$YY1
+                 YYE=$YY2
+                 if [[ $PAR = 228 ]] ; then
+                    if [[ $YY1 -lt $YY1_228 ]] ; then
+                       YYS=$YY1_228
+                    fi
+                 fi
+                 iyys="${iyys} ${YYS},"
+                 iyye="${iyye} ${YYE},"
+                 sel_ts=${TS_DIA[$n]}
+                 if [[ $sel_ts = 1 ]] ; then
+                    echo "Considering the index $TS"
+                    ROOT=TS_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}_${TS}
+                    if [[ -s ${TARDIR}/${FILE} && $FORCETS = 0 ]] ; then
+                       echo "${FILE} already exists"
+                    else
+                       nts=$((nts+1))
+                       NAM_LST="${NAM_LST} ${TS}"
+                       PAR_LST="${PAR_LST} ${PAR}"
+                       LEV_LST="${LEV_LST} ${LEV}"
+                       YYS_LST="${YYS_LST} ${YYS}"
+                       YYE_LST="${YYE_LST} ${YYE}"
+                       TS_LST[$n]=1
+                    fi
+                 fi
+                 n=$((n+1))
+             done
+             set -A NAM_LST $NAM_LST
+             set -A PAR_LST $PAR_LST
+             set -A LEV_LST $LEV_LST
+             set -A YYS_LST $YYS_LST
+             set -A YYE_LST $YYE_LST
+#
+             rcal=""
+             n=0
+             while [[ $n -lt $TOT_TS ]] ; do
+                   rcal="${rcal} ${TS_LST[$n]},"
+                   n=$((n+1))
+             done
+cat > cts_rcal_$ie << EOF
+rcal=${rcal}
+ /
+EOF
+#
+# Compute time series if necessary
+#
+             if [[ $nts -ne 0 ]] ; then
+                ECMISS=1 # The new tar file will have to be archived in ECFS
+cat > ts_$ie << EOF
+ &control
+  nmon=${NMON},
+  nens=${NENS},
+  iyys=${iyys}
+  iyye=${iyye}
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nts=${TOT_TS},
+ /
+EOF
+                cat ts_$ie tslist_std cts_rcal_$ie > ts_list_$ie
+                ./cal_ts.x < ts_list_$ie
+#               ls -l TS_*${IAFCM}-${IEFCM}*
+#
+# Compute scores and inflate
+#
+                namet=""
+                par=""
+                lev=""
+                iyys=""
+                iyye=""
+                n=0
+                while [[ $n -lt $nts ]] ; do
+                      namet="${namet} '${NAM_LST[$n]}',"
+                      par="${par} ${PAR_LST[$n]},"
+                      lev="${lev} ${LEV_LST[$n]},"
+                      iyys="${iyys} ${YYS_LST[$n]},"
+                      iyye="${iyye} ${YYE_LST[$n]},"
+                      n=$((n+1))
+                done
+                while [[ $n -lt 80 ]] ; do
+                      namet="${namet} 'NONE',"
+                      par="${par} 999,"
+                      lev="${lev} 999,"
+                      iyys="${iyys} 999,"
+                      iyye="${iyye} 999,"
+                      n=$((n+1))
+                done
+#
+cat > scots_$ie << EOF
+ &control
+  nens=${NENS},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  anin=${ANIN},
+  nf1=${IAFCM},
+  nf2=${IEFCM},
+  expt='${EXPID_LONG}',
+  nts=${nts},
+ /
+EOF
+cat > scots_rcal_$ie << EOF
+ &timeseries
+  namet=${namet}
+  par=${par}
+  lev=${lev}
+  iyys=${iyys}
+  iyye=${iyye}
+ /
+EOF
+                cat scots_$ie scots_rcal_$ie > scots_list_$ie
+                ./cal_ts_sco.x < scots_list_$ie
+#
+# Collect results
+#
+                n=0
+                for NAM in ${NAM_LST[*]} ; do
+                    PAR=${PAR_LST[$n]}
+                    LEV=${LEV_LST[$n]}
+                    YYS=${YYS_LST[$n]}
+                    YYE=${YYE_LST[$n]}
+                    ROOT=TS_${EXPID_LONG}_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}_${NAM}
+                    TARDIR=${DIAG}_mod.${JOB_ID}
+                    if [[ -s ${FILE} ]] ; then
+                       mv ${FILE} ${TARDIR}/.
+                    else
+                       echo "There is a problem; ${FILE} is supposed to exist"
+                       exit
+                    fi
+                    ROOT=TS_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                    FILE=${ROOT}_${PAR}_${LEV}_${IAFCM}-${IEFCM}_${NAM}
+                    TARDIR=${DIAG}_ref.${JOB_ID}
+                    if [[ -s ${FILE} ]] ; then
+                       mv ${FILE} ${TARDIR}/.
+                    else
+                       echo "There is a problem; ${FILE} is supposed to exist"
+                       exit
+                    fi
+                    n=$((n+1))
+                done # NAM loop
+             fi # nts ne 0
+             ip=$((ip+1))
+       done # ip endwhile
+#
+# Copy in ECFS if required
+#
+       emkdir -p ec:${ECDISK_LONG}/ts
+       if [[ ${ECMISS} -eq 1 ]] ; then
+          if [[ $TS_ECST -eq 1 ]] ; then
+             TARDIR=${DIAG}_mod.${JOB_ID}
+             cd ${TARDIR}
+             tar -b 512 -cvf ../${TARFILE}.tar .
+             cd ..
+             ecp -o ${TARFILE}.tar ec:${ECDISK_LONG}/ts/
+             echmod 770 ec:${ECDISK_LONG}/ts/${TARFILE}.tar
+             TARDIR=${DIAG}_ref.${JOB_ID}
+             cd ${TARDIR}
+             tar -b 512 -cvf ../${ROOTREF}.tar .
+             cd ..
+             ecp -o ${ROOTREF}.tar ec:${ECDISK}/data/refe/ts/
+             echmod 770 ec:${ECDISK}/data/refe/ts/${ROOTREF}.tar
+          fi # ECSTORE
+       fi
+       \rm -f ${TARFILE}.tar ${ROOTREF}.tar
+#
+       \rm -rf ${DIAG}_mod.${JOB_ID} ${DIAG}_ref.${JOB_ID}
+       echo "End of start date "$MM
+       im=$((im+1))
+   done # MM loop 
+else
+   echo "No time series selected"
+fi # dia_ts = 2
+#
+date
+echo "end of cal_ts.sms"
+#
+%include <tail.h>
+#

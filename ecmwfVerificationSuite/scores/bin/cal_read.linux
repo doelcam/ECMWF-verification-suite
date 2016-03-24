@@ -1,0 +1,55 @@
+# Put here the header to run in the linux cluster if you want
+
+WORKDIR=$TMPDIR # Define another one if you want to see the output
+SOURCE="/home/ne/nep/sms/verify/scores/bin" # Do not forget to change to wherever you have the fortran files
+EXPVER=Emm01 # Name of the experiment
+NENS=63
+VAR=228 # Variable (assumes only surface variables)
+START_MONTH=11
+
+cd $WORKDIR
+
+cp ${SOURCE}/cal_read.f $WORKDIR
+cp ${SOURCE}/tools.f $WORKDIR
+
+pgf90 -pg -C -O3 cal_read.f tools.f -o cal_read.x $EMOSLIB $NAGLIB
+
+ls -l cal_read.x
+
+cp /scratch/rd/nep/waitqueue/sms/verify/scores/work/ANOM*${EXPVER}*1980-2001*${VAR}* ${WORKDIR}
+cp /scratch/rd/nep/waitqueue/sms/verify/scores/work/ANOM*refe*1980-2001*${VAR}* ${WORKDIR}
+cp /scratch/rd/nep/waitqueue/sms/verify/scores/work/LSM_${EXPVER}* ${WORKDIR}
+ls -l ANOM*
+
+cat > nlist << EOF
+ &control
+  nx=144,
+  ny=71,
+  nens=${NENS},
+  iyy1=1980,
+  iyy2=2001,
+  imm=${START_MONTH},
+  idd=01,
+  itt=00,
+  cros=01,
+  ipar=${VAR},
+  ilev=000,
+  anin=0,
+  nf1=002,
+  nf2=004,
+  expt='${EXPVER}',
+  nreg=16,
+ /
+ &region
+  namr='NHEX','TROP','SHEX','EURO','NAME','WAFR','SAFR','EAFR','NI03','NI04','NI12','NI34','AMAZ','INDI','NEUR','MEDI',
+  limn=  87.5,  20.0, -30.0,  75.0,  70.0,  25.0, -15.0,   5.0,   5.0,   5.0,   0.0,   5.0,  12.5,  30.0,  75.0,  47.5,
+  lims=  30.0, -20.0, -87.5,  35.0,  30.0,   0.0, -28.0, -12.0,  -5.0,  -5.0, -10.0,  -5.0, -20.0,   0.0,  47.5,  30.0,
+  limw=   0.0,   0.0,   0.0, -12.5,-130.0, -20.0,  20.0,  29.0,-150.0, 160.0, -90.0,-170.0, -82.5,  70.0, -10.0, -10.0,
+  lime= 360.0, 360.0, 360.0,  42.5, -60.0,  25.0,  35.0,  42.0, -90.0,-150.0, -80.0,-120.0, -35.0, 100.0,  40.0,  40.0,
+  ilsm=     0,     0,     0,     0,     0,     1,     1,     1,     0,     0,     0,     0,     0,     0,     0,     0,
+  rcal=     0,     0,     0,     1,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     1,     0,
+ /
+EOF
+./cal_read.x < nlist
+
+ls -ltr

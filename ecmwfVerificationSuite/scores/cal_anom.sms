@@ -1,0 +1,472 @@
+%manual
+NAME
+
+  cal_anom - Computes the anomalies
+
+DESCRIPTION
+
+  Computes the anomalies in cross-validation
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of cal_anom.sms"
+#
+%include <sms_vars.h>
+%include <config.h>
+%include <def_exp2.h>
+%include <def_exp3.h>
+#
+if [[ -a $SMSWORK ]] ; then
+   cd $SMSWORK
+else
+   mkdir -p $SMSWORK
+   cd $SMSWORK
+fi
+#
+# Get running date
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+DATE=${DAY}${MON}${YEA}
+#
+# Get and compile fortran files
+#
+\rm -f cal_anom.x
+cp ${PATHSO}/cal_anom.f .
+cp ${PATHSO}/tools.f .
+#pgf90 -C cal_anom.f tools.f -o cal_anom.x $LINKLI1 $LINKLI3
+gfortran -fbounds-check cal_anom.f tools.f -o cal_anom.x $LINKLI1 $LINKLI3
+
+ls -l cal_anom.x
+#
+if [[ $MULTI -eq 1 ]] ; then
+   NUMCHECK=$NUMMOD
+else
+   NUMCHECK=$((NUMMOD-1))
+fi
+#
+# Loop over months
+#
+
+im=0
+for MM in ${MM_LIST[*]} ; do
+    DD=${DD_LIST[$im]}
+    TT=${TT_LIST[$im]}
+#
+# Check if the tar files exist already in ECFS
+#
+    ROOTREF=ANOM_refe_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I0
+    compute_ref=2 # By default the value is assuming that all files are missing from the tar archive
+    ecp -o ec:${ECDISK}/data/refe/anom/${ROOTREF}.tar . || echo "File is missing in ECFS"
+    if [[ -s ${ROOTREF}.tar ]] ; then
+       tar xvf ${ROOTREF}.tar
+       compute_ref=1 # This will take the value 2 if a particular file is missing from the tar archive
+       echo "WARNING: Anomaly files for the reference already exist"
+    fi
+    \rm -f ${ROOTREF}.tar
+#
+# Loop over experiments to check if all the single-model and multi-model (if required)
+# anomalies are available
+#
+    ie=0
+    while [[ $ie -le $NUMCHECK ]] ; do
+          export EXPID=${EXP_LIST[$ie]}
+          if [[ $ie -lt $NUMMOD ]] ; then
+             export TYPID=${TYP_LIST[$ie]}
+             if [[ ${ORI_LIST[$ie]} != off ]] ; then
+                TYPID=0
+             fi
+             if [[ $TYPID = 0 ]] ; then
+                export ORIID=${ORI_LIST[$ie]}
+                export CLAID=${CLA_LIST[$ie]}
+                export METID=${MET_LIST[$ie]}
+                export SYSID=${SYS_LIST[$ie]}
+                export STRID=${STR_LIST[$ie]}
+             else
+                export ORIID=off
+                export CLAID=off
+                export METID=off
+                export SYSID=off
+                export STRID=off
+             fi
+%include <def_exp1.h>
+          else
+%include <sms_vars.h>
+%include <def_exp3.h>
+          fi
+          ROOTEXP=ANOM_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+          compute_exp[$ie]=2 # By default the value is assuming that all files are missing from the tar archive
+          ecp -o ec:${ECDISK_LONG}/anom/${ROOTEXP}.tar . || echo "File is missing in ECFS"
+          if [[ -s ${ROOTEXP}.tar ]] ; then
+             tar xvf ${ROOTEXP}.tar
+             echo "WARNING: Anomaly files for the experiment $EXPID already exist"
+             compute_exp[$ie]=1 # This will be 2 if some files need to be created
+          else
+             if [[ $TYPID -eq 1 && $ie -lt $NUMMOD ]] ; then
+                echo "All multi-model anomaly files should have been previously created using MULT=1"
+                exit
+             fi
+          fi
+          \rm -f ${ROOTEXP}.tar
+          ie=$((ie+1))
+    done # ie loop
+    
+#
+# Adding land sea masking
+# DM trying to fix soil moisture issue
+
+#mars<<EOM
+#RETRIEVE,
+#   PARAM=172,
+#   TYPE=an,
+#   CLASS=od,
+#   LEVTYPE=sfc,
+#   EXPVER=1,
+#   STREAM=oper,
+#   REPRES=ll,
+#   GRID=2.5/2.5,
+#   AREA=${north}/${east}/${south}/${west},
+#   TARGET=LSM_data
+#EOM
+
+# Loop over fields
+#
+    iz=0
+    while [[ $iz -le $TOT_ANO_PAR ]] ; do
+          PAR=${ANO_PAR[$iz]}
+          LEV=${ANO_LEV[$iz]}
+          YYS=$YY1
+          YYE=$YY2
+          if [[ $PAR = 228 ]] ; then
+             if [[ $YY1 -lt $YY1_228 ]] ; then
+                YYS=$YY1_228
+             fi
+          fi
+#
+# Loop over years
+#
+          YYANO=${YYS}
+          while [[ $YYANO -le $YYE ]] ; do
+#
+# Check if the specific files for the reference
+# exist and have the right size
+#
+                compute=2
+                FILEREF=ANOM_refe_${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I0_${PAR}_${LEV}_${YYANO}
+                idealsize=$NMON
+                if [[ -s ${FILEREF} ]] ; then
+                   compute=1
+                    #/home/ma/emos/bin/${ARCH}/GRIB_profile ${FILEREF} > list0
+                    #grib_ls ${FILEREF} > list0
+                    #wc list0 > list1
+                    #cut -c 1-8 list1 | read fakesize
+                    #lastsize=$((fakesize-5))
+                   lastsize=`grib_count ${FILEREF}`
+                   echo $lastsize
+                   if [[ $lastsize != $idealsize ]] ;then
+                      echo "Anomaly file of wrong size"
+                      echo "Check that at least it contains all the fields"
+                      cp ${FILEREF} grib_in
+                      grib_set -s dataTime=0100,forecastMonth=0 grib_in grib_out
+                      mv grib_out ${FILEREF}
+#
+                      \rm -f target.grb
+# DM changes, issue with fcmonth
+NMONmin=$((NMON-1))		      
+		      
+mars<<EOM
+read,
+source=${FILEREF},
+param=${PAR},
+fcmonth=0/to/${NMONmin},
+target=target.grb
+EOM
+                       #/home/ma/emos/bin/${ARCH}/GRIB_profile target.grb > list0
+                       #grib_ls target.grb > list0
+                       #wc list0 > list1
+                       #cut -c 1-8 list1 | read fakesize
+                       #lastsize=$((fakesize-5))
+                      lastsize=`grib_count target.grb`
+                      echo $lastsize
+                      if [[ $lastsize != $idealsize ]] ;then
+                         compute=2
+                      else
+                         mv ${FILEREF} ${FILEREF}.large
+                         mv target.grb ${FILEREF}
+                      fi
+                   fi
+                fi
+
+
+#
+# Create anomaly files if necessary
+#
+
+
+
+cat > anom_gen << EOF
+ &control
+  nx=${NX},
+  ny=${NY},
+  nmon=${NMON},
+  iyy1=${YYS},
+  iyy2=${YYE},
+  imm=${MM},
+  idd=${DD},
+  itt=${TT},
+  cros=${CROS},
+  ipar=${PAR},
+  ilev=${LEV},
+  iyya=${YYANO},
+EOF
+cat > anom_spe << EOF
+  nens=1,
+  anin=0,
+  expt='refe',
+ /
+EOF
+                if [[ $compute = 2 || $FORCEANRE = 1 ]] ; then
+                   compute_ref=2
+                   cat anom_gen anom_spe > anom_list
+                   ./cal_anom.x < anom_list
+                   if [[ -s ${FILEREF} ]] ; then
+                       #/home/ma/emos/bin/${ARCH}/GRIB_profile ${FILEREF} > list0
+                       #grib_ls ${FILEREF} > list0
+                       #wc list0 > list1
+                       #cut -c 1-8 list1 | read fakesize
+                       #lastsize=$((fakesize-5)) 
+                      lastsize=`grib_count ${FILEREF}`
+                      echo $lastsize
+                      if [[ $lastsize != $idealsize ]] ;then
+                         echo "Anomaly file of wrong size"
+                         exit
+                      fi
+                   fi
+                fi # endif compute for reference
+#
+# Check if the specific files for the experiment (and the single-model experiments)
+# exist and have the right size
+# In the case of the multi-model, still check if the anomaly
+# files for the individual models are available
+#
+                ie=0
+                EXPlst=""
+                MEMlst=""
+                while [[ $ie -le $NUMCHECK ]] ; do
+                      export EXPID=${EXP_LIST[$ie]}
+                      if [[ $ie -lt $NUMMOD ]] ; then
+                         export TYPID=${TYP_LIST[$ie]}
+                         if [[ ${ORI_LIST[$ie]} != off ]] ; then
+                            TYPID=0
+                         fi
+                         if [[ $TYPID = 0 ]] ; then
+                            export ORIID=${ORI_LIST[$ie]}
+                            export CLAID=${CLA_LIST[$ie]}
+                            export METID=${MET_LIST[$ie]}
+                            export SYSID=${SYS_LIST[$ie]}
+                            export STRID=${STR_LIST[$ie]}
+                         else
+                            export ORIID=off
+                            export CLAID=off
+                            export METID=off
+                            export SYSID=off
+                            export STRID=off
+                         fi
+                         NENS=${NEN_LIST[$ie]}
+                         MEMlst="${MEMlst} ${NENS}"
+%include <def_exp1.h>
+                         EXPlst="${EXPlst} ${EXPID_LONG}"
+                      fi
+                      if [[ $ie -eq $NUMMOD ]] ; then
+%include <sms_vars.h>
+%include <def_exp3.h>
+                      fi
+                      ROOTEXP=ANOM_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                      SUFF=${YYS}-${YYE}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}_${PAR}_${LEV}_${YYANO}
+                      FILEEXP=ANOM_${EXPID_LONG}_${SUFF}
+                      compute=2
+                      idealsize=$((NENS*NMON))
+                      if [[ -s ${FILEEXP} ]] ; then
+                         compute=1
+                          #/home/ma/emos/bin/${ARCH}/GRIB_profile ${FILEEXP} > list0
+                          #grib_ls ${FILEEXP} > list0
+                          #wc list0 > list1
+                          #cut -c 1-8 list1 | read fakesize
+                          #lastsize=$((fakesize-5)) 
+                         lastsize=`grib_count ${FILEEXP}`
+                         echo $lastsize
+                         if [[ $lastsize != $idealsize ]] ;then
+                            echo "Anomaly file of wrong size"
+                            echo "Check that at least it contains all the fields"
+                            \rm -f target.grb
+mars<<EOM
+read,
+source=${FILEEXP},
+param=${PAR},
+number=0/to/$((NENS-1)),
+fcmonth=1/to/${NMON},
+target=target.grb
+EOM
+                             #/home/ma/emos/bin/${ARCH}/GRIB_profile target.grb > list0
+                             #grib_ls target.grb > list0
+                             #wc list0 > list1
+                             #cut -c 1-8 list1 | read fakesize
+                             #lastsize=$((fakesize-5)) 
+                            lastsize=`grib_count target.grb`
+                            echo $lastsize
+                            if [[ $lastsize != $idealsize ]] ;then
+                               compute=2
+                            else
+                               mv ${FILEEXP} ${FILEEXP}.large
+                               mv target.grb ${FILEEXP}
+                            fi
+                         fi
+                      fi
+                      if [[ $compute = 2 || $FORCEANMO = 1 ]] ; then
+                         compute_exp[$ie]=2
+#
+# Create anomaly files if necessary
+#
+cat > anom_spe << EOF
+  nens=${NENS},
+  anin=${ANIN},
+  expt='${EXPID_LONG}',
+ /
+EOF
+                         if [[ $ie -lt $NUMMOD ]] ; then
+                            cat anom_gen anom_spe > anom_list
+                            ./cal_anom.x < anom_list
+                         else
+                            \rm -f $FILEEXP
+                            touch $FILEEXP
+                            set -A EXPlst $EXPlst
+                            set -A MEMlst $MEMlst
+                            m=0
+                            if=0
+                            for EXP in ${EXPlst[*]} ; do
+                                mem=0
+                                \rm -f toto_tmp toto_out
+                                while [[ $mem -le $((MEMlst[$if]-1)) ]] ; do
+                                      \rm -f grib_in grib_out
+                                      FILE=ANOM_${EXP}_${SUFF}
+cat>mars_req<<EOF
+read,
+source=${FILE},
+number=$mem,
+target=grib_in
+EOF
+                                      mars mars_req
+                                      \rm -f grib_out
+                                      grib_set -s perturbationNumber=${m} grib_in grib_out
+                                      cat grib_out >> toto_out
+                                      m=$((m+1))
+                                      mem=$((mem+1))
+                                done
+                                cat toto_out >> $FILEEXP
+                                if=$((if+1))
+                            done
+                         fi # endif computing for single or multi-model
+                         if [[ -s ${FILEEXP} ]] ; then
+                             #/home/ma/emos/bin/${ARCH}/GRIB_profile ${FILEEXP} > list0
+                             #grib_ls ${FILEEXP} > list0
+                             #wc list0 > list1
+                             #cut -c 1-8 list1 | read fakesize
+                             #lastsize=$((fakesize-5))
+                            lastsize=`grib_count ${FILEEXP}` 
+                            echo $lastsize
+                            if [[ $lastsize != $idealsize ]] ;then
+                               echo "Anomaly file of wrong size"
+                               exit
+                            fi
+                         fi
+                      fi # endif compute for experiment
+                      ie=$((ie+1))
+                done # ie endwhile
+#
+# End of anomaly for this year
+#
+                YYANO=$((YYANO+1))
+          done # YYANO endwhile
+          iz=$((iz+1))
+    done # iz endwhile
+#
+# Copy in ECFS if required
+#
+    if [[ $ECSTORE -eq 1 ]] ; then
+       if [[ ${compute_ref} -eq 2 ]] ; then
+#
+# Collect results in a tar file
+#
+          for FILE in `ls ANOM_refe*.large` ; do
+              echo $FILE > toto
+              wc -m toto>toto1
+              cut -c 1-8 toto1|read skip skip2
+              cut -c 1-$((skip-7)) toto | read NEWFILE
+              mv ${FILE} ${NEWFILE}
+          done
+          tar cvf ${ROOTREF}.tar ANOM_refe_*_${MM}${DD}${TT}_CV${CROS}_I${ANIN}*
+          emkdir -p ec:${ECDISK}/data/refe/anom || echo "ECFS directory already exists"
+          ecp -o ${ROOTREF}.tar ec:${ECDISK}/data/refe/anom
+          echmod 770 ec:${ECDISK}/data/refe/anom/${ROOTREF}.tar
+       fi
+       \rm -f ${ROOTREF}.tar
+       ie=0
+       while [[ $ie -le $NUMCHECK ]] ; do
+             export EXPID=${EXP_LIST[$ie]}
+             if [[ $ie -lt $NUMMOD ]] ; then
+                export TYPID=${TYP_LIST[$ie]}
+                if [[ ${ORI_LIST[$ie]} != off ]] ; then
+                   TYPID=0
+                fi
+                if [[ $TYPID = 0 ]] ; then
+                   export ORIID=${ORI_LIST[$ie]}
+                   export CLAID=${CLA_LIST[$ie]}
+                   export METID=${MET_LIST[$ie]}
+                   export SYSID=${SYS_LIST[$ie]}
+                   export STRID=${STR_LIST[$ie]}
+                else
+                   export ORIID=off
+                   export CLAID=off
+                   export METID=off
+                   export SYSID=off
+                   export STRID=off
+                fi
+%include <def_exp1.h>
+             else
+%include <sms_vars.h>
+%include <def_exp3.h>
+             fi
+#
+# Collect results in a tar file if necessary
+#
+             if [[ ${compute_exp[$ie]} -eq 2 ]] ; then
+                for FILE in `ls ANOM_${EXPID_LONG}*.large` ; do
+                    echo $FILE > toto
+                    wc -m toto>toto1
+                    cut -c 1-8 toto1|read skip skip2
+                    cut -c 1-$((skip-7)) toto | read NEWFILE
+                    mv ${FILE} ${NEWFILE}
+                done
+                ROOTEXP=ANOM_${EXPID_LONG}_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}
+                tar cvf ${ROOTEXP}.tar ANOM_${EXPID_LONG}_*_${MM}${DD}${TT}_CV${CROS}_I${ANIN}*
+                emkdir -p ec:${ECDISK_LONG}/anom  || echo "ECFS directory already exists"
+                ecp -o ${ROOTEXP}.tar ec:${ECDISK_LONG}/anom/
+                echmod 770 ec:${ECDISK_LONG}/anom/${ROOTEXP}.tar
+             fi
+             \rm -f ${ROOTEXP}.tar
+             ie=$((ie+1))
+       done # ie endwhile
+    fi # ECSTORE
+    \rm -f ANOM_*_${YY1}-${YY2}_${MM}${DD}${TT}_CV${CROS}_I${ANIN}.tar
+#
+    im=$((im+1))
+done # MM loop 
+#
+date
+echo "end of cal_anom.sms"
+#
+%include <tail.h>
+#

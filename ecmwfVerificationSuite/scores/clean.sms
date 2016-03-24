@@ -1,0 +1,81 @@
+%manual
+NAME
+
+  clean - Cleans suite
+
+DESCRIPTION
+
+  Prepares a logfile and cleans files from the working directory,
+  including job outputs
+
+%end
+%include <head.h>
+%include <trap.h>
+echo "start of clean.sms"
+date
+#
+%include <sms_vars.h>
+%include <config.h>
+%include <def_exp2.h>
+#
+typeset -Z2 DAY
+DAY=`date | cut -c9-10`
+MON=`date | cut -c5-7`
+YEA=`date | cut -c25-28`
+HOU=`date | cut -c12-13`
+MIN=`date | cut -c15-16`
+DATE="${DAY}${MON}${YEA}at${HOU}h${MIN}m"
+#
+# Prepares logfile
+#
+FILE=log.${DATE}.tar
+\rm -f $FILE*
+cd $SMSWORK
+#
+# Include ouput of the jobs
+#
+for OUTDIR in definitions retrieval climate anom determ prob ; do
+    if [[ -s ${SMSOUT}/${OUTDIR} ]] ; then
+       cd ${SMSOUT}/${OUTDIR}
+       tar rf ${SMSWORK}/${FILE} *.? || echo "Directory missing"
+       \rm -rf *
+       cd ..
+       rmdir ${OUTDIR}
+    fi
+done
+cd $SMSWORK
+#
+# Archive logfile in ECFS if requied
+#
+cd $SMSWORK
+if [[ $ECSTORE -eq 1 ]] ; then
+   emkdir -p ec:${ECDISK}/log || echo "ECFS directory for the log files already exists"
+   if [[ -s $FILE ]] ; then
+      gzip $FILE
+      ecp $FILE.gz ec:${ECDISK}/log/
+   fi
+fi
+\rm -f ${FILE} ${FILE}.gz
+#
+# Removes all files from working directory
+#
+cd ..
+\rm -rf work
+mkdir work
+#
+# Removes all files from SMSOUT directory
+#
+cd ${SMSOUT}
+\rm -rf *
+#
+# Removes all files from GIF directory
+#
+cd ${SMSGIF}/..
+\rm -rf giffiles
+mkdir giffiles
+#
+date
+echo "end of clean.sms" 
+#
+%include <tail.h>
+#
