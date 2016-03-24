@@ -11,7 +11,8 @@ Other changes involve:
 
 I have tried to comment everything as much as possible, my email is at the bottom if (when) it doesn't work for you - but n.b., these scripts come with absolutely no guarantee.
 
-Contents of the gitHub respository
+Contents of the gitHub respository:
+-------------
 
 documentation
 -------------
