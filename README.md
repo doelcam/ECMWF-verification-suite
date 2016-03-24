@@ -37,5 +37,5 @@ remotePlottingScripts - containing all the NCL scripts I have written which make
 	Alternatively feel free to write your own plotting if you don't like NCL / my plots - the output of the suite is not incredibly complex, e.g. for maps it is just grib files with a single lat/lon field in each. But some scores (e.g. reliability diagrams) are a bit more complicated and perhaps the work I've already done here can help. If these don't work as expected or you get some errors (you will probably get errors) then maybe I can help, feel free to contact me.
 	
 	Dave MacLeod, University of Oxford 24th March 2016
-	macleod at atm.ox.ac.uk
-	dave.a.macleod at gmail.com
+
+	macleod at atm.ox.ac.uk / dave.a.macleod at gmail.com
